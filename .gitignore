@@ -1,0 +1,29 @@
+# ============= 가상환경 / 캐시 =============
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# ============= 업로드된 grd_list 데이터 (매일 새로 업로드) =============
+app/storage/latest/*.xls
+app/storage/latest/*.xlsx
+app/storage/latest/meta.json
+
+# 원본 샘플 (배포에 불필요)
+당일분배/*.xls
+누적분배/*.xls
+
+# ============= 비밀 정보 =============
+.streamlit/secrets.toml
+
+# ============= 로컬 산출물 =============
+*.csv
+.DS_Store
+Thumbs.db
+
+# ============= 영구화 포함 항목 (GitHub에 같이 커밋) =============
+# app/storage/config/line_rules.json       — 작업불가 규칙
+# app/storage/config/group_policy.json     — 수주건명 그룹 정책
+# app/storage/config/split_lock.json       — 분할 락
+# app/storage/config/item_master.json      — (deprecated, 미사용)
+# 품목마스터/*.xlsx                          — 사용자 마스터 파일

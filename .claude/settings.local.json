@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(try{ $r=Invoke-WebRequest \"http://127.0.0.1:8501/_stcore/health\" -UseBasicParsing -TimeoutSec 3; Write-Output \"health: $\\($r.StatusCode\\) $\\($r.Content\\)\" } catch { Write-Output \"down: $_\" })",
+      "Bash(python -m streamlit run app/app.py --server.headless=true --server.port=8501 --server.address=0.0.0.0 --browser.gatherUsageStats=false)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; python \"c:\\\\Users\\\\FURSYS\\\\Desktop\\\\계획및분배\\\\tests\\\\smoke_split.py\" 2>&1)",
+      "PowerShell(Get-ChildItem \"c:\\\\Users\\\\FURSYS\\\\Desktop\\\\계획및분배\\\\품목마스터\" -File | Select-Object Name, @{N=\"KB\";E={[math]::Round\\($_.Length/1KB,1\\)}}, LastWriteTime | Format-Table -AutoSize)",
+      "PowerShell(git config --global user.name 2>&1)",
+      "PowerShell(git config --global user.email 2>&1)"
+    ]
+  }
+}
