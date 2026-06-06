@@ -322,17 +322,21 @@ div[data-testid="stDialog"] [data-testid="stDataFrame"] [role="gridcell"][aria-c
     margin-bottom: 18px;
 }
 .sidebar-brand .sb-logo {
-    font-size: 28px;
+    font-size: 22px;
     font-weight: 800;
     color: #f5ede0;
-    letter-spacing: -0.5px;
+    letter-spacing: -0.3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .sidebar-brand .sb-sub {
     font-size: 10px;
     color: #c8945a;
-    letter-spacing: 3px;
+    letter-spacing: 2px;
     font-weight: 700;
-    margin-top: 2px;
+    margin-top: 3px;
+    white-space: nowrap;
 }
 .sb-section-title {
     color: #c8945a !important;
@@ -360,6 +364,22 @@ div[data-testid="stDialog"] [data-testid="stDataFrame"] [role="gridcell"][aria-c
     color: #a89478;
     margin-top: 2px;
     line-height: 1.2;
+}
+/* 사이드바 안의 액션 버튼 (삭제 등) — 작고 톤다운 */
+section[data-testid="stSidebar"] .stButton > button {
+    background: rgba(255,255,255,0.04) !important;
+    color: #c8b89e !important;
+    border: 1px solid rgba(200, 148, 90, 0.3) !important;
+    padding: 4px 0 !important;
+    min-height: 28px !important;
+    height: 28px !important;
+    font-size: 13px !important;
+    margin-top: 4px;
+}
+section[data-testid="stSidebar"] .stButton > button:hover {
+    background: rgba(231, 111, 81, 0.18) !important;
+    border-color: #e76f51 !important;
+    color: #ffffff !important;
 }
 </style>
     """,
@@ -1414,62 +1434,90 @@ def _handle_upload(kind: storage.Kind, uploaded, label: str):
 
 
 def sidebar_uploads():
-    # 브랜드 헤더
+    # 브랜드 헤더 + 모드 배지
+    role_badge = (
+        "<span style='background:#c8945a;color:#2d2017;font-size:9px;"
+        "font-weight:700;padding:2px 8px;border-radius:8px;letter-spacing:1px;'>"
+        "ADMIN</span>"
+        if is_admin() else
+        "<span style='background:#5b7a9c;color:#f5ede0;font-size:9px;"
+        "font-weight:700;padding:2px 8px;border-radius:8px;letter-spacing:1px;'>"
+        "VIEWER</span>"
+    )
     st.sidebar.markdown(
-        """
+        f"""
 <div class='sidebar-brand'>
-    <div class='sb-logo'>🛋️ ATELIER</div>
-    <div class='sb-sub'>SOFA PRODUCTION SUITE</div>
+    <div class='sb-logo'>🛋️ SIDIZ SOFA</div>
+    <div class='sb-sub'>PRODUCTION DISPATCH</div>
+    <div style='margin-top:6px;'>{role_badge}</div>
 </div>
         """,
         unsafe_allow_html=True,
     )
 
-    # 파일 업로드 섹션
-    st.sidebar.markdown("<div class='sb-section-title'>📤 데이터 업로드</div>", unsafe_allow_html=True)
-    st.sidebar.caption("최신 파일 1개만 유지됩니다.")
+    # 파일 업로드 — 관리자만
+    if is_admin():
+        st.sidebar.markdown("<div class='sb-section-title'>📤 데이터 업로드</div>", unsafe_allow_html=True)
+        st.sidebar.caption("최신 파일 1개만 유지됩니다.")
 
-    cu = st.sidebar.file_uploader(
-        "누적분배",
-        type=["xls", "xlsx"], key="up_cu",
-        help="grd_list_*.xls (누적 생산 데이터)",
-    )
-    _handle_upload("cumulative", cu, "누적분배")
+        cu = st.sidebar.file_uploader(
+            "누적분배",
+            type=["xls", "xlsx"], key="up_cu",
+            help="grd_list_*.xls (누적 생산 데이터)",
+        )
+        _handle_upload("cumulative", cu, "누적분배")
 
-    da = st.sidebar.file_uploader(
-        "당일분배",
-        type=["xls", "xlsx"], key="up_da",
-        help="grd_list_*.xls (당일 생산 데이터)",
-    )
-    _handle_upload("daily", da, "당일분배")
+        da = st.sidebar.file_uploader(
+            "당일분배",
+            type=["xls", "xlsx"], key="up_da",
+            help="grd_list_*.xls (당일 생산 데이터)",
+        )
+        _handle_upload("daily", da, "당일분배")
 
-    # 저장 후 최신 메타 표시 — 카드 형태
+    # 저장 후 최신 메타 표시 — 카드 형태 + 삭제 버튼
     meta = storage.latest_meta()
     if meta.get("cumulative") or meta.get("daily"):
         st.sidebar.markdown(
             "<div class='sb-section-title'>📁 현재 데이터</div>",
             unsafe_allow_html=True,
         )
-    if meta.get("cumulative"):
-        m = meta["cumulative"]
-        st.sidebar.markdown(
-            f"<div class='sb-file-card'>"
-            f"<div class='sb-file-meta'>📊 누적분배</div>"
-            f"<div class='sb-file-name'>{m['original_name']}</div>"
-            f"<div class='sb-file-meta'>업로드 {m['uploaded_at']}</div>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-    if meta.get("daily"):
-        m = meta["daily"]
-        st.sidebar.markdown(
-            f"<div class='sb-file-card'>"
-            f"<div class='sb-file-meta'>🚚 당일분배</div>"
-            f"<div class='sb-file-name'>{m['original_name']}</div>"
-            f"<div class='sb-file-meta'>업로드 {m['uploaded_at']}</div>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
+
+    def _file_card_with_delete(kind: str, label_emoji: str, label_text: str):
+        m = meta.get(kind)
+        if not m:
+            return
+        with st.sidebar.container():
+            if is_admin():
+                col_card, col_btn = st.columns([4, 1], gap="small")
+                with col_card:
+                    st.markdown(
+                        f"<div class='sb-file-card'>"
+                        f"<div class='sb-file-meta'>{label_emoji} {label_text}</div>"
+                        f"<div class='sb-file-name'>{m['original_name']}</div>"
+                        f"<div class='sb-file-meta'>업로드 {m['uploaded_at']}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                with col_btn:
+                    if st.button("🗑️", key=f"del_{kind}",
+                                 help=f"{label_text} 데이터 삭제",
+                                 use_container_width=True):
+                        storage.delete_upload(kind)  # type: ignore[arg-type]
+                        st.session_state.pop(f"_saved_id_{kind}", None)
+                        st.rerun()
+            else:
+                # 뷰어 — 삭제 버튼 없이 카드만
+                st.sidebar.markdown(
+                    f"<div class='sb-file-card'>"
+                    f"<div class='sb-file-meta'>{label_emoji} {label_text}</div>"
+                    f"<div class='sb-file-name'>{m['original_name']}</div>"
+                    f"<div class='sb-file-meta'>업로드 {m['uploaded_at']}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+    _file_card_with_delete("cumulative", "📊", "누적분배")
+    _file_card_with_delete("daily", "🚚", "당일분배")
 
     # 라인 인원
     st.sidebar.markdown(
@@ -1485,6 +1533,15 @@ def sidebar_uploads():
         """,
         unsafe_allow_html=True,
     )
+
+    # 하단 로그아웃 / 모드 전환
+    st.sidebar.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
+    if st.sidebar.button("🚪 로그아웃 / 모드 변경", use_container_width=True,
+                         key="btn_logout"):
+        st.session_state.pop("_authed", None)
+        st.session_state.pop("_role", None)
+        st.session_state.pop("_show_admin_form", None)
+        st.rerun()
 
 
 def tab_cumulative():
@@ -2253,22 +2310,24 @@ def tab_policy(policy: GroupPolicy):
 def tab_integrity(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock):
     st.caption(
         "누적분배 + 당일분배 데이터를 결합하여 라인별 수량/시간이 타당한지 검증합니다.\n"
-        "두 데이터 파일이 모두 업로드되어 있어야 합니다."
+        "한쪽 파일만 있어도 그 데이터 기준으로 표시되며, 일관성 검증은 두 파일이 모두 있을 때만 활성화됩니다."
     )
     cu_df = _load_df("cumulative")
     da_df = _load_df("daily")
 
-    if cu_df is None or da_df is None:
-        missing = []
-        if cu_df is None:
-            missing.append("누적분배")
-        if da_df is None:
-            missing.append("당일분배")
-        st.warning(f"⚠️ 다음 파일이 없습니다: {', '.join(missing)}. 좌측에서 업로드하세요.")
+    if cu_df is None and da_df is None:
+        st.warning("⚠️ 누적분배와 당일분배 파일이 모두 없습니다. 좌측에서 하나 이상 업로드하세요.")
         return
+    if cu_df is None:
+        st.info("ℹ️ 누적분배 데이터가 없어 **당일분배 단독** 기준으로 표시합니다.")
+    elif da_df is None:
+        st.info("ℹ️ 당일분배 데이터가 없어 **누적분배 단독** 기준으로 표시합니다.")
 
-    cu_res = process_cumulative(cu_df)
-    da_res = distribute_daily(da_df, rules, group_policy=policy, split_lock=split_lock)
+    cu_res = process_cumulative(cu_df) if cu_df is not None else {"detail": pd.DataFrame()}
+    da_res = (
+        distribute_daily(da_df, rules, group_policy=policy, split_lock=split_lock)
+        if da_df is not None else {"detail": pd.DataFrame()}
+    )
 
     integ = build_integrity(cu_res["detail"], da_res["detail"])
     kpi = integ["kpi"]
@@ -2458,7 +2517,11 @@ def tab_integrity(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock):
     st.markdown("#### 3) 수주건명 라인 일관성 검증")
     st.caption("두 데이터에 동시 존재하는 수주건명이 같은 라인에 배정됐는지 확인합니다.")
     cons = integ["consistency"]
-    if cons.empty:
+    # 한 쪽 데이터만 있으면 비교 불가
+    if cu_df is None or da_df is None:
+        missing = "당일분배" if da_df is None else "누적분배"
+        st.info(f"ℹ️ {missing} 파일이 없어 일관성 검증은 사용할 수 없습니다. 양쪽 파일이 모두 업로드되면 활성화됩니다.")
+    elif cons.empty:
         st.info("두 데이터에 공통으로 존재하는 수주건명이 없습니다.")
     else:
         filt = st.multiselect(
@@ -2490,36 +2553,37 @@ def _get_app_password() -> str:
 
 
 def _check_password() -> bool:
-    """비밀번호 게이트. 통과 시 True. 미통과 시 로그인 화면 렌더 후 False."""
+    """진입 게이트. 관리자(비번 필요) / 뷰어(비번 없음) 두 모드 지원."""
     if st.session_state.get("_authed"):
         return True
 
     expected = _get_app_password()
-    # 비밀번호가 아예 설정 안 된 경우 — 로컬 개발 등에서는 통과 허용
+    # 비밀번호 미설정 — 자동 관리자 통과 (로컬 개발 환경)
     if not expected:
         st.session_state["_authed"] = True
+        st.session_state["_role"] = "admin"
         return True
 
-    # 로그인 화면
+    # 로그인 화면 CSS
     st.markdown(
         """
 <style>
 .login-wrap {
-    max-width: 440px;
+    max-width: 460px;
     margin: 60px auto 0 auto;
     background: #ffffff;
     border: 1px solid #e8dcc8;
     border-left: 6px solid #c8945a;
     border-radius: 14px;
-    padding: 32px 36px;
+    padding: 28px 32px;
     box-shadow: 0 4px 18px rgba(74,52,36,0.08);
     text-align: center;
 }
 .login-wrap .lg-logo {
-    font-size: 30px;
+    font-size: 28px;
     font-weight: 800;
     color: #4a3424;
-    letter-spacing: -0.5px;
+    letter-spacing: -0.4px;
     margin-bottom: 4px;
 }
 .login-wrap .lg-sub {
@@ -2527,37 +2591,76 @@ def _check_password() -> bool:
     color: #8b6f4e;
     letter-spacing: 3px;
     font-weight: 600;
-    margin-bottom: 24px;
+    margin-bottom: 18px;
     text-transform: uppercase;
 }
 .login-wrap .lg-msg {
     font-size: 13px;
     color: #6b4a30;
-    margin-bottom: 18px;
+    margin-bottom: 14px;
 }
 </style>
 <div class='login-wrap'>
-    <div class='lg-logo'>🛋️ ATELIER</div>
-    <div class='lg-sub'>SOFA PRODUCTION SUITE</div>
-    <div class='lg-msg'>접속 비밀번호를 입력하세요.</div>
+    <div class='lg-logo'>🛋️ SIDIZ SOFA</div>
+    <div class='lg-sub'>PRODUCTION DISPATCH</div>
+    <div class='lg-msg'>접속 방법을 선택하세요</div>
 </div>
         """,
         unsafe_allow_html=True,
     )
 
-    c1, c2, c3 = st.columns([1, 1.4, 1])
+    c1, c2, c3 = st.columns([1, 1.6, 1])
     with c2:
-        with st.form("login_form", clear_on_submit=False, border=False):
-            pw = st.text_input("비밀번호", type="password", label_visibility="collapsed",
-                               placeholder="비밀번호 입력")
-            submitted = st.form_submit_button("🔐 입장", use_container_width=True)
-            if submitted:
-                if pw == expected:
-                    st.session_state["_authed"] = True
+        show_admin_form = st.session_state.get("_show_admin_form", False)
+
+        # 두 진입 버튼 (사용자가 비번 form을 열기 전까지)
+        if not show_admin_form:
+            ba, bv = st.columns(2)
+            with ba:
+                if st.button("🔐 관리자 입장", use_container_width=True):
+                    st.session_state["_show_admin_form"] = True
                     st.rerun()
-                else:
-                    st.error("비밀번호가 올바르지 않습니다.")
+            with bv:
+                if st.button("👀 뷰어로 입장", use_container_width=True,
+                             help="조회 전용 (편집·업로드 불가)"):
+                    st.session_state["_authed"] = True
+                    st.session_state["_role"] = "viewer"
+                    st.rerun()
+            st.caption(
+                "🔐 **관리자**: 비밀번호 필요 · 모든 기능 사용 가능  \n"
+                "👀 **뷰어**: 비밀번호 없이 즉시 접속 · 조회/다운로드만 가능"
+            )
+        else:
+            # 관리자 비번 입력 form
+            with st.form("login_form", clear_on_submit=False, border=False):
+                pw = st.text_input("관리자 비밀번호", type="password",
+                                   label_visibility="collapsed",
+                                   placeholder="관리자 비밀번호 입력")
+                fc1, fc2 = st.columns([1, 1])
+                with fc1:
+                    submitted = st.form_submit_button("🔐 입장", use_container_width=True)
+                with fc2:
+                    canceled = st.form_submit_button("← 뒤로", use_container_width=True)
+                if submitted:
+                    if pw == expected:
+                        st.session_state["_authed"] = True
+                        st.session_state["_role"] = "admin"
+                        st.session_state.pop("_show_admin_form", None)
+                        st.rerun()
+                    else:
+                        st.error("비밀번호가 올바르지 않습니다.")
+                if canceled:
+                    st.session_state.pop("_show_admin_form", None)
+                    st.rerun()
     return False
+
+
+def is_admin() -> bool:
+    return st.session_state.get("_role") == "admin"
+
+
+def is_viewer() -> bool:
+    return st.session_state.get("_role") == "viewer"
 
 
 def main():
@@ -2569,9 +2672,9 @@ def main():
         """
 <div class='brand-header'>
     <div class='brand-title'>🛋️ 라인별 분배 계획
-        <span class='brand-tag'>SOFA · ATELIER</span>
+        <span class='brand-tag'>SIDIZ SOFA</span>
     </div>
-    <div class='brand-sub'>Sofa Production Line Dispatching System</div>
+    <div class='brand-sub'>Sidiz Sofa Production Line Dispatching System</div>
 </div>
         """,
         unsafe_allow_html=True,
@@ -2585,23 +2688,38 @@ def main():
     # 품목마스터/ 폴더의 모든 엑셀/CSV를 자동 로드 (UI 관리 없음)
     master, master_files = load_master_from_folder(storage.MASTER_FOLDER)
 
-    t1, t2, t3, t4, t5 = st.tabs([
-        "📊 누적분배",
-        "🚚 당일분배 (자동 분배)",
-        "🔗 정합성 검증",
-        "⚙️ 라인 규칙 관리",
-        "🧩 수주건명 그룹 정책",
-    ])
-    with t1:
-        tab_cumulative()
-    with t2:
-        tab_daily(rules, policy, split_lock)
-    with t3:
-        tab_integrity(rules, policy, split_lock)
-    with t4:
-        tab_rules(rules, split_lock, master)
-    with t5:
-        tab_policy(policy)
+    if is_admin():
+        t1, t2, t3, t4, t5 = st.tabs([
+            "📊 누적분배",
+            "🚚 당일분배 (자동 분배)",
+            "🔗 정합성 검증",
+            "⚙️ 라인 규칙 관리",
+            "🧩 수주건명 그룹 정책",
+        ])
+        with t1:
+            tab_cumulative()
+        with t2:
+            tab_daily(rules, policy, split_lock)
+        with t3:
+            tab_integrity(rules, policy, split_lock)
+        with t4:
+            tab_rules(rules, split_lock, master)
+        with t5:
+            tab_policy(policy)
+    else:
+        # 뷰어 — 조회 전용 탭만
+        st.info("👀 **뷰어 모드** — 조회/다운로드만 가능합니다. 편집·업로드는 관리자 로그인이 필요합니다.")
+        t1, t2, t3 = st.tabs([
+            "📊 누적분배",
+            "🚚 당일분배 (자동 분배)",
+            "🔗 정합성 검증",
+        ])
+        with t1:
+            tab_cumulative()
+        with t2:
+            tab_daily(rules, policy, split_lock)
+        with t3:
+            tab_integrity(rules, policy, split_lock)
 
 
 if __name__ == "__main__":

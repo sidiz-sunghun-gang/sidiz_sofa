@@ -53,6 +53,34 @@ def save_upload(kind: Kind, data: bytes, original_name: str) -> Path:
     return final_path
 
 
+def delete_upload(kind: Kind) -> bool:
+    """저장된 최신 파일 + 메타에서 해당 종류 삭제. 삭제했으면 True."""
+    path = LATEST_DIR / _FILENAME[kind]
+    removed = False
+    if path.exists():
+        try:
+            path.unlink()
+            removed = True
+        except OSError:
+            pass
+    # 메타에서도 제거
+    meta = latest_meta()
+    if kind in meta:
+        meta.pop(kind, None)
+        if meta:
+            with open(META_PATH, "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+        else:
+            # 메타가 비면 파일도 삭제
+            try:
+                if META_PATH.exists():
+                    META_PATH.unlink()
+            except OSError:
+                pass
+        removed = True
+    return removed
+
+
 def load_latest_bytes(kind: Kind) -> Optional[bytes]:
     path = LATEST_DIR / _FILENAME[kind]
     if not path.exists():
