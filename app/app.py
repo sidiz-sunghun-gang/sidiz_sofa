@@ -666,12 +666,12 @@ def _render_merged_combined(
 .merged-tbl td.sum-col { font-weight: 700; color: #4a3424; }
 </style>
     """
-    # CSS는 markdown 으로, 표 HTML 은 st.html 로 — escape 문제 회피
-    st.markdown(css, unsafe_allow_html=True)
-    if hasattr(st, "html"):
-        st.html("".join(parts))
-    else:
-        st.markdown("".join(parts), unsafe_allow_html=True)
+    # CSS는 페이지당 한 번만 주입 (NotFoundError 방지)
+    if not st.session_state.get("_merged_css_injected"):
+        st.markdown(css, unsafe_allow_html=True)
+        st.session_state["_merged_css_injected"] = True
+    # 표 HTML은 markdown으로 통일 (st.html() 사용 시 DOM 추적 충돌 사례 있음)
+    st.markdown("".join(parts), unsafe_allow_html=True)
 
 
 def _render_styled_table(styled, *, key: str = "tbl"):
