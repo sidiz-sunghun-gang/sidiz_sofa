@@ -345,6 +345,55 @@ div[data-testid="stDialog"] [data-testid="stDataFrame"] [role="gridcell"][aria-c
     letter-spacing: 1.5px;
     margin: 14px 0 8px 0;
 }
+
+/* ========== 라인×출고일자 병합 표 (merged-tbl) — 전역 ========== */
+.merged-wrap { overflow-x: auto; }
+.merged-tbl {
+    width: 100%;
+    border-collapse: collapse;
+    font-variant-numeric: tabular-nums;
+    font-size: 13.5px;
+    background: #ffffff;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 1px 4px rgba(74, 52, 36, 0.06);
+}
+.merged-tbl thead th {
+    background-color: #4a3424 !important;
+    color: #f5ede0 !important;
+    font-weight: 800;
+    font-size: 14px;
+    text-align: center;
+    padding: 10px 8px;
+    border: 1px solid #3a2818;
+    border-bottom: 2px solid #c8945a;
+    letter-spacing: 0.2px;
+}
+.merged-tbl tbody td {
+    text-align: center;
+    padding: 8px 10px;
+    border: 1px solid #ece1cd;
+    color: #3a2c1f;
+}
+.merged-tbl td.line-cell {
+    font-weight: 800;
+    color: #4a3424 !important;
+    background-color: #f5ede0;
+    vertical-align: middle;
+    border-right: 2px solid #c8945a;
+}
+.merged-tbl td.line-cell.total {
+    background-color: #ebe1d0;
+}
+.merged-tbl tr.row-qty td:not(.line-cell) { background-color: #fdf2e0; }
+.merged-tbl tr.row-sec td:not(.line-cell) { background-color: #f5f1ea; }
+.merged-tbl tr.row-total td:not(.line-cell) {
+    background-color: #ebe1d0;
+    font-weight: 700;
+    color: #4a3424;
+}
+.merged-tbl td.zero { color: #c8b89e; }
+.merged-tbl td.sum-col { font-weight: 700; color: #4a3424; }
 .sb-file-card {
     background: rgba(255,255,255,0.05);
     border-radius: 6px;
@@ -610,67 +659,7 @@ def _render_merged_combined(
             parts.append("</tr>")
 
     parts.append("</tbody></table></div>")
-
-    css = """
-<style>
-.merged-wrap { overflow-x: auto; }
-.merged-tbl {
-    width: 100%;
-    border-collapse: collapse;
-    font-variant-numeric: tabular-nums;
-    font-size: 13.5px;
-    background: #ffffff;
-    border-radius: 10px;
-    overflow: hidden;
-    box-shadow: 0 1px 4px rgba(74, 52, 36, 0.06);
-}
-.merged-tbl thead th {
-    background-color: #4a3424;
-    color: #f5ede0 !important;
-    font-weight: 800;
-    font-size: 14px;
-    text-align: center;
-    padding: 10px 8px;
-    border: 1px solid #3a2818;
-    border-bottom: 2px solid #c8945a;
-    letter-spacing: 0.2px;
-}
-.merged-tbl tbody td {
-    text-align: center;
-    padding: 8px 10px;
-    border: 1px solid #ece1cd;
-    color: #3a2c1f;
-}
-/* 라인 셀 (rowspan 병합) — 크림 배경 + 카멜 액센트 보더 */
-.merged-tbl td.line-cell {
-    font-weight: 800;
-    color: #4a3424 !important;
-    background-color: #f5ede0;
-    vertical-align: middle;
-    border-right: 2px solid #c8945a;
-}
-.merged-tbl td.line-cell.total {
-    background-color: #ebe1d0;
-}
-/* 행 색상 — 가구 톤 (수량=옅은 카멜, 시간=옅은 베이지 그레이) */
-.merged-tbl tr.row-qty td:not(.line-cell) { background-color: #fdf2e0; }
-.merged-tbl tr.row-sec td:not(.line-cell) { background-color: #f5f1ea; }
-.merged-tbl tr.row-total td:not(.line-cell) {
-    background-color: #ebe1d0;
-    font-weight: 700;
-    color: #4a3424;
-}
-/* 0 흐리게 — 베이지 톤 */
-.merged-tbl td.zero { color: #c8b89e; }
-/* 합계 열 굵게 */
-.merged-tbl td.sum-col { font-weight: 700; color: #4a3424; }
-</style>
-    """
-    # CSS는 페이지당 한 번만 주입 (NotFoundError 방지)
-    if not st.session_state.get("_merged_css_injected"):
-        st.markdown(css, unsafe_allow_html=True)
-        st.session_state["_merged_css_injected"] = True
-    # 표 HTML은 markdown으로 통일 (st.html() 사용 시 DOM 추적 충돌 사례 있음)
+    # 표 HTML 렌더 — CSS는 전역에서 한 번 주입됨 (페이지 상단 _GLOBAL_CSS 참조)
     st.markdown("".join(parts), unsafe_allow_html=True)
 
 
