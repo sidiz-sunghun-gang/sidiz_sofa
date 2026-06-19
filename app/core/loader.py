@@ -101,18 +101,12 @@ def read_grd_excel(source: Union[str, bytes, io.BytesIO]) -> pd.DataFrame:
             )
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # 라인 정규화: "(1라인) 김민웅" → "1라인"
+    # 라인 정규화: 담당자 이름 우선 → 신규 라인 번호로 재할당
+    # 예: 데이터 '(4라인) 김진영' → '김진영' 매칭 → 신규 5라인
+    # 매칭 실패 시 데이터의 라인 번호 fallback
     if "line" in df.columns:
-        df["line_norm"] = (
-            df["line"].astype(str).str.extract(r"\((\d+라인|\d+라인반제품|\d+라인\)?반제품)\)", expand=False)
-        )
-        df["line_no"] = df["line"].astype(str).str.extract(r"\((\d+)라인", expand=False)
-        # fallback: "9라인)반제품" 같은 형태
-        mask_null = df["line_no"].isna()
-        if mask_null.any():
-            df.loc[mask_null, "line_no"] = (
-                df.loc[mask_null, "line"].astype(str).str.extract(r"(\d+)라인", expand=False)
-            )
+        from .lines import resolve_line_no
+        df["line_no"] = df["line"].apply(resolve_line_no)
         df["line_no"] = pd.to_numeric(df["line_no"], errors="coerce").astype("Int64")
         df["line_norm"] = df["line_no"].astype(str).where(df["line_no"].notna(), None) + "라인"
 

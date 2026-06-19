@@ -19,9 +19,11 @@ import pandas as pd
 from .rules import LineRules
 from .policy import GroupPolicy
 from .split import SplitLock, distribute_rows_by_weight
+from .lines import TARGET_LINES, LINE_HEADCOUNT as _LINE_HC
 
-DAILY_TARGET_LINES = [1, 3, 4, 5]
-LINE_HEADCOUNT = {1: 2, 3: 2, 4: 2, 5: 1}
+# 전체 9개 라인이 분배 대상 (각 라인 1명)
+DAILY_TARGET_LINES = list(TARGET_LINES)
+LINE_HEADCOUNT = dict(_LINE_HC)
 
 # 기본 가중치 — 수량 우선 + 락 부합도
 DEFAULT_WEIGHTS = {"qty": 0.4, "sec": 0.15, "date": 0.2, "lock": 0.25}

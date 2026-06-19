@@ -1508,18 +1508,18 @@ def sidebar_uploads():
     _file_card_with_delete("cumulative", "📊", "누적분배")
     _file_card_with_delete("daily", "🚚", "당일분배")
 
-    # 라인 인원
+    # 라인별 담당자 표시
     st.sidebar.markdown(
-        "<div class='sb-section-title'>👥 라인 인원 (고정)</div>",
+        "<div class='sb-section-title'>👥 라인 담당자</div>",
         unsafe_allow_html=True,
     )
+    from core.lines import LINE_WORKERS as _LW
+    rows = "<br>".join(
+        f"&nbsp;&nbsp;<b>{ln}라인</b> · {name}"
+        for ln, name in _LW.items()
+    )
     st.sidebar.markdown(
-        """
-<div style='font-size: 12px; line-height: 1.8;'>
-&nbsp;&nbsp;🪡 <b>1·3·4라인</b> · 2명<br>
-&nbsp;&nbsp;✂️ <b>5라인</b> · 1명
-</div>
-        """,
+        f"<div style='font-size: 11.5px; line-height: 1.7;'>{rows}</div>",
         unsafe_allow_html=True,
     )
 

@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import pandas as pd
 
-# 분배 대상 라인 (참고: 누적분배 자체는 단순 표시지만, UI 색상 강조에 사용)
-CUMUL_TARGET_LINES = [1, 3, 4, 5]
-# 표시 라인 (8·9라인을 참고용으로 함께 노출)
-CUMUL_DISPLAY_LINES = [1, 3, 4, 5, 8, 9]
+from .lines import TARGET_LINES
+
+# 9개 라인 모두 분배 대상이자 표시 대상
+CUMUL_TARGET_LINES = list(TARGET_LINES)
+CUMUL_DISPLAY_LINES = list(TARGET_LINES)
 
 
 def process_cumulative(
