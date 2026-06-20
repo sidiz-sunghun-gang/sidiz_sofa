@@ -174,6 +174,16 @@ def distribute_daily(
     is_splittable = raw_keys.apply(policy.should_split)
     is_locked = target.index.isin(locked_assign.keys())
 
+    # 9라인(크리수나) 전용 코드는 수주건명 그룹에서 자동 분리.
+    # 이유: 쿠션·커넥터·헤드레스트는 단차 품질 이슈가 없는 부속이라 한 라인 묶음 불필요.
+    # 같은 수주에 9라인 전용 코드와 1~8라인 코드가 섞이면 교집합 ∅로 미지정되던 사고 방지.
+    line9_only_flags = []
+    for idx in target.index:
+        code = str(target.loc[idx, "item_code"])
+        al = rules.allowed_lines_for(code, lines=target_lines)
+        line9_only_flags.append(al == [9])
+    is_line9_only = pd.Series(line9_only_flags, index=target.index)
+
     # 셋트구분: 마스터 '셋트구분' 시트의 (코드,색상) 매칭 행은 수주건명 무시하고
     # 셋트번호+출고일자 단위로 그룹핑 (수주취소가 잦아 출고일로 묶음 관리하는 품목)
     set_keys = pd.Series([""] * len(target), index=target.index, dtype=object)
@@ -191,8 +201,10 @@ def distribute_daily(
             set_keys.loc[idx] = f"__set{sn}_{ship}"
     has_set = set_keys != ""
 
-    # 그룹키 결정: 셋트 매칭 > raw 수주건명(빈/분할가능/락 아닌 경우) > solo
-    fallback = raw_keys.where(~(is_empty | is_splittable | is_locked), solo_marks)
+    # 그룹키 결정: 셋트 매칭 > 9라인 전용/빈/분할가능/락 → 단독, 그 외 → raw 수주건명
+    fallback = raw_keys.where(
+        ~(is_empty | is_splittable | is_locked | is_line9_only), solo_marks
+    )
     target["_group_key"] = set_keys.where(has_set, fallback)
 
     # 그룹 집계: 부하 / 수량 / 교집합 후보 라인 / 출고일자별 분포

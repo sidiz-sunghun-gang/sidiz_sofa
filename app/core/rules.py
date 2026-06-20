@@ -26,25 +26,38 @@ class LineRules:
     pattern: Dict[str, List[str]] = field(default_factory=dict)  # line_no(str) -> [regex,...]
 
     def forbidden_lines_for(self, item_code: str) -> List[int]:
-        """해당 품목코드에 대해 작업 불가인 라인 번호 리스트."""
+        """해당 품목코드에 대해 작업 불가인 라인 번호 리스트.
+
+        Longest-match-only: 같은 코드에 여러 prefix가 매칭되면 가장 긴 prefix만
+        적용한다. 예) `^ACSB23`과 `^ACSB2391`이 둘 다 등록돼 있으면
+        `ACSB2391X1` 코드는 더 긴 `^ACSB2391`의 규칙만 따른다. 짧은 prefix가
+        더 구체적 prefix의 라인 차단을 광범위 매칭으로 덮어쓰는 사고를 막는다.
+        """
         if item_code is None:
             return []
         code = str(item_code)
-        out = []
+        out: set[int] = set()
+        # exact 일치는 항상 적용 (가장 구체적)
         for ln, codes in self.exact.items():
             if code in codes:
-                out.append(int(ln))
+                out.add(int(ln))
+        # pattern: 매칭된 것 중 가장 긴 패턴만 적용
+        pat_to_lines: Dict[str, set[int]] = {}
         for ln, patterns in self.pattern.items():
             for p in patterns:
                 if not p:
                     continue
                 try:
                     if re.search(p, code):
-                        out.append(int(ln))
-                        break
+                        pat_to_lines.setdefault(p, set()).add(int(ln))
                 except re.error:
                     continue
-        return sorted(set(out))
+        if pat_to_lines:
+            max_len = max(len(p) for p in pat_to_lines.keys())
+            for p, lns in pat_to_lines.items():
+                if len(p) == max_len:
+                    out.update(lns)
+        return sorted(out)
 
     def allowed_lines_for(self, item_code: str, lines: List[int] | None = None) -> List[int]:
         lines = lines or DEFAULT_LINES

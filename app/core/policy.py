@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
 
-# 추천 기본 분할 키워드
+# 추천 기본 분할 키워드 — 좌/우 단차 품질 이슈가 없는 묶음들
 DEFAULT_SPLIT_KEYWORDS: list[str] = [
     "재고",
     "센터",
@@ -20,6 +20,8 @@ DEFAULT_SPLIT_KEYWORDS: list[str] = [
     "매출외",
     "반품",
     "내작",
+    "출고",  # "6/19 출고" 같은 단순 출고일 묶음 — 가구 단차 이슈 없음
+    "전시품",  # "(전시품_레이아웃)..." 류 — 전시 변경 묶음
 ]
 
 
