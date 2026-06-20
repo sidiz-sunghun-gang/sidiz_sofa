@@ -1652,6 +1652,46 @@ def tab_daily(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
     set_icon = "✅" if set_n > 0 else "⚠️"
     st.caption(f"{set_icon} 셋트구분 매핑: **{set_n}쌍** 로드됨 (같은 셋트의 행은 한 라인에 묶임).")
 
+    # 0쌍이면 원인 진단을 화면에 표시 — 어디서 실패하는지 짚어줌
+    if set_n == 0:
+        with st.expander("🔧 셋트구분 0쌍 진단 — 어디서 실패하는지", expanded=True):
+            folder = storage.MASTER_FOLDER
+            st.write(f"**MASTER_FOLDER 경로**: `{folder}`")
+            st.write(f"**폴더 존재**: {folder.exists()}")
+            if folder.exists():
+                files_in_folder = [p.name for p in folder.iterdir() if p.is_file()]
+                st.write(f"**폴더 내 파일 목록**: {files_in_folder}")
+            try:
+                from core.master import load_master_from_folder as _lm
+                _, mfiles = _lm(folder)
+                st.write(f"**load_master_from_folder 결과**: {mfiles}")
+            except Exception as e:
+                st.write(f"**load_master_from_folder 에러**: {e}")
+            matched = None
+            for fn in master_files:
+                if "마감작업자별" in fn or "생산가능품목" in fn:
+                    matched = fn
+                    break
+            st.write(f"**매칭된 마스터 파일명**: {matched}")
+            if matched:
+                full_path = folder / matched
+                st.write(f"**파일 절대경로**: `{full_path}`")
+                st.write(f"**파일 존재**: {full_path.exists()}")
+                try:
+                    import pandas as pd
+                    xls = pd.ExcelFile(full_path)
+                    st.write(f"**엑셀 시트 목록**: {xls.sheet_names}")
+                    if "셋트구분" in xls.sheet_names:
+                        df_dbg = pd.read_excel(full_path, sheet_name="셋트구분", header=0)
+                        st.write(f"**셋트구분 시트 컬럼**: {list(df_dbg.columns)}")
+                        st.write(f"**셋트구분 시트 행수**: {len(df_dbg)}")
+                        st.write(f"**첫 3행 미리보기**:")
+                        st.dataframe(df_dbg.head(3))
+                    else:
+                        st.error("❌ '셋트구분' 시트가 엑셀에 없음 — 마스터 파일이 옛 버전일 가능성")
+                except Exception as e:
+                    st.write(f"**엑셀 읽기 에러**: {e}")
+
     res = distribute_daily(df, rules, group_policy=policy, split_lock=split_lock,
                            manual=manual, source_workers=SOURCE_WORKERS,
                            set_groups=set_groups)
