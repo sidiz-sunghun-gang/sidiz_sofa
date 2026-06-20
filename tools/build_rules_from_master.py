@@ -68,6 +68,65 @@ def collect_general_rules(forbidden: dict[int, set[str]]) -> int:
     return count
 
 
+def collect_cushion_rules(forbidden: dict[int, set[str]]) -> int:
+    """품목명칭에 '쿠션' 포함된 코드는 9라인(크리수나) 전용으로 강제.
+
+    품목군코드상세 + 품목코드_명칭 맵핑 두 소스를 모두 검사하여 매칭된 코드를
+    1~8라인 차단 + 9라인 허용으로 등록한다. prefix(^코드) 패턴 사용.
+    """
+    nineline_codes: set[str] = set()
+    count = 0
+
+    # 1) 품목군코드상세 — 추출코드(prefix) + 품목명칭
+    df = pd.read_excel(MASTER_FILE, sheet_name="품목군코드상세", header=0).fillna("")
+    code_col = "추출코드" if "추출코드" in df.columns else None
+    name_col = next((c for c in df.columns if "품목명" in str(c)), None)
+    if code_col and name_col:
+        for _, row in df.iterrows():
+            code = str(row[code_col]).strip()
+            name = str(row[name_col]).strip()
+            if not code or code.lower() == "nan":
+                continue
+            if "쿠션" not in name:
+                continue
+            for line_no in range(1, 9):
+                forbidden[line_no].add(f"^{code}")
+            nineline_codes.add(f"^{code}")
+            count += 1
+
+    # 2) 품목코드_명칭 맵핑 — 정확 코드 + 품목명
+    mapping_file = MASTER_FILE.parent / "품목코드_명칭 맵핑.xlsx"
+    if mapping_file.exists():
+        # 헤더가 둘째 행에 있어 자동 감지
+        raw = pd.read_excel(mapping_file, header=None, dtype=str).fillna("")
+        header_row = None
+        for idx in range(min(5, len(raw))):
+            row_vals = [str(v).strip() for v in raw.iloc[idx].tolist()]
+            if any("품목코드" in v for v in row_vals) and any("품목명" in v or "명칭" in v for v in row_vals):
+                header_row = idx
+                break
+        if header_row is not None:
+            df2 = pd.read_excel(mapping_file, header=header_row, dtype=str).fillna("")
+            code_col2 = next((c for c in df2.columns if "품목코드" in str(c)), None)
+            name_col2 = next((c for c in df2.columns if ("품목명" in str(c) or "명칭" in str(c))), None)
+            if code_col2 and name_col2:
+                for _, row in df2.iterrows():
+                    code = str(row[code_col2]).strip()
+                    name = str(row[name_col2]).strip()
+                    if not code or code.lower() == "nan":
+                        continue
+                    if "쿠션" not in name:
+                        continue
+                    # 정확 코드 prefix — 색상이 붙어도 매칭되도록 ^코드 사용
+                    for line_no in range(1, 9):
+                        forbidden[line_no].add(f"^{code}")
+                    nineline_codes.add(f"^{code}")
+                    count += 1
+
+    forbidden[LINE_9] -= nineline_codes
+    return count
+
+
 def collect_special_line_rules(forbidden: dict[int, set[str]]) -> int:
     """특정라인 지정 시트 — 9라인 전용 코드.
 
@@ -112,9 +171,10 @@ def main():
     forbidden: dict[int, set[str]] = {ln: set() for ln in LINE_WORKERS.keys()}
 
     n_general = collect_general_rules(forbidden)
+    n_cushion = collect_cushion_rules(forbidden)
     n_special = collect_special_line_rules(forbidden)
 
-    print(f"\n[처리 결과] 일반 코드 {n_general}개, 9라인 전용 코드 {n_special}개")
+    print(f"\n[처리 결과] 일반 코드 {n_general}개, 쿠션 코드 {n_cushion}개, 특정라인 코드 {n_special}개")
 
     out = {"exact": {}, "pattern": {}}
     for ln, patterns in sorted(forbidden.items()):

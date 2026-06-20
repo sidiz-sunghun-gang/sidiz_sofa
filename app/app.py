@@ -31,6 +31,7 @@ from core.split import (  # noqa: E402
     SplitLock, load_split_lock, save_split_lock, split_lock_from_dataframe,
 )
 from core.manual import ManualAssignments, load_manual, save_manual  # noqa: E402
+from core.sets import SetGroups, load_set_groups  # noqa: E402
 from core.lines import LINE_WORKERS, line_label  # noqa: E402
 from core.master import (  # noqa: E402
     ItemMaster, load_master_from_folder,
@@ -1628,7 +1629,8 @@ def tab_cumulative():
 
 
 def tab_daily(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
-              manual: ManualAssignments | None = None):
+              manual: ManualAssignments | None = None,
+              set_groups: SetGroups | None = None):
     df = _load_df("daily")
     if df is None:
         st.info("좌측에서 **당일분배 파일**을 업로드하세요.")
@@ -1647,7 +1649,8 @@ def tab_daily(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
         )
 
     res = distribute_daily(df, rules, group_policy=policy, split_lock=split_lock,
-                           manual=manual, source_workers=SOURCE_WORKERS)
+                           manual=manual, source_workers=SOURCE_WORKERS,
+                           set_groups=set_groups)
     summary = res["summary"]
     combined = res["combined"]
     detail = res["detail"]
@@ -1991,7 +1994,8 @@ def tab_policy(policy: GroupPolicy):
     st.dataframe(summary, use_container_width=True, hide_index=True)
 
 
-def tab_integrity(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock):
+def tab_integrity(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
+                  set_groups: SetGroups | None = None):
     st.caption(
         "누적분배 + 당일분배 데이터를 결합하여 라인별 수량/시간이 타당한지 검증합니다.\n"
         "한쪽 파일만 있어도 그 데이터 기준으로 표시되며, 일관성 검증은 두 파일이 모두 있을 때만 활성화됩니다."
@@ -2010,7 +2014,7 @@ def tab_integrity(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock):
     cu_res = process_cumulative(cu_df) if cu_df is not None else {"detail": pd.DataFrame()}
     da_res = (
         distribute_daily(da_df, rules, group_policy=policy, split_lock=split_lock,
-                         source_workers=SOURCE_WORKERS)
+                         source_workers=SOURCE_WORKERS, set_groups=set_groups)
         if da_df is not None else {"detail": pd.DataFrame()}
     )
 
@@ -2373,6 +2377,12 @@ def main():
     manual = load_manual(storage.MANUAL_PATH)
     # 품목마스터/ 폴더의 모든 엑셀/CSV를 자동 로드 (UI 관리 없음)
     master, master_files = load_master_from_folder(storage.MASTER_FOLDER)
+    # 셋트구분 시트 — 마감작업자별 엑셀에서 직접 읽음
+    set_groups = SetGroups()
+    for fp in master_files:
+        if "마감작업자별" in str(fp) or "생산가능품목" in str(fp):
+            set_groups = load_set_groups(fp)
+            break
 
     if is_admin():
         t1, t2, t3, t4, t5 = st.tabs([
@@ -2385,9 +2395,9 @@ def main():
         with t1:
             tab_cumulative()
         with t2:
-            tab_daily(rules, policy, split_lock, manual)
+            tab_daily(rules, policy, split_lock, manual, set_groups)
         with t3:
-            tab_integrity(rules, policy, split_lock)
+            tab_integrity(rules, policy, split_lock, set_groups)
         with t4:
             tab_rules(rules, master)
         with t5:
@@ -2403,9 +2413,9 @@ def main():
         with t1:
             tab_cumulative()
         with t2:
-            tab_daily(rules, policy, split_lock, manual)
+            tab_daily(rules, policy, split_lock, manual, set_groups)
         with t3:
-            tab_integrity(rules, policy, split_lock)
+            tab_integrity(rules, policy, split_lock, set_groups)
 
 
 if __name__ == "__main__":

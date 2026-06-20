@@ -22,6 +22,7 @@ from .policy import GroupPolicy
 from .split import SplitLock, distribute_rows_by_weight
 from .lines import TARGET_LINES, LINE_HEADCOUNT as _LINE_HC, line_label
 from .manual import ManualAssignments
+from .sets import SetGroups
 
 # 분배 후보 라인 — 1~9라인 모두 (어디로 갈 수 있는지).
 # 9라인은 마스터 '특정라인 지정' 시트 코드만 받도록 line_rules.json에 이미 반영됨.
@@ -51,8 +52,10 @@ def distribute_daily(
     group_policy: GroupPolicy | None = None,
     split_lock: SplitLock | None = None,
     manual: ManualAssignments | None = None,
+    set_groups: SetGroups | None = None,
 ) -> dict:
     target_lines = target_lines or DAILY_TARGET_LINES
+    sets = set_groups or SetGroups()
     # 분배 풀:
     #   - source_workers가 지정되면 "line" 텍스트에 그 이름이 포함된 행만 풀에 포함
     #     (예: "(8라인) 크리수나" 행 ✓, "(9라인)반제품" 행 ✗)
@@ -170,7 +173,27 @@ def distribute_daily(
     is_empty = raw_keys == ""
     is_splittable = raw_keys.apply(policy.should_split)
     is_locked = target.index.isin(locked_assign.keys())
-    target["_group_key"] = raw_keys.where(~(is_empty | is_splittable | is_locked), solo_marks)
+
+    # 셋트구분: 마스터 '셋트구분' 시트의 (코드,색상) 매칭 행은 수주건명 무시하고
+    # 셋트번호+출고일자 단위로 그룹핑 (수주취소가 잦아 출고일로 묶음 관리하는 품목)
+    set_keys = pd.Series([""] * len(target), index=target.index, dtype=object)
+    if sets and sets.by_code_color:
+        codes = target["item_code"].astype(str).fillna("") if "item_code" in target.columns else None
+        colors = target["color"].astype(str).fillna("") if "color" in target.columns else None
+        ships = target["ship_date"].astype(str).fillna("") if "ship_date" in target.columns else None
+        for idx in target.index:
+            code = codes.loc[idx].strip() if codes is not None else ""
+            color = colors.loc[idx].strip() if colors is not None else ""
+            sn = sets.lookup(code, color)
+            if sn is None:
+                continue
+            ship = ships.loc[idx].strip() if ships is not None else ""
+            set_keys.loc[idx] = f"__set{sn}_{ship}"
+    has_set = set_keys != ""
+
+    # 그룹키 결정: 셋트 매칭 > raw 수주건명(빈/분할가능/락 아닌 경우) > solo
+    fallback = raw_keys.where(~(is_empty | is_splittable | is_locked), solo_marks)
+    target["_group_key"] = set_keys.where(has_set, fallback)
 
     # 그룹 집계: 부하 / 수량 / 교집합 후보 라인 / 출고일자별 분포
     groups = []
