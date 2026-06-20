@@ -22,8 +22,10 @@ from .split import SplitLock, distribute_rows_by_weight
 from .lines import TARGET_LINES, LINE_HEADCOUNT as _LINE_HC, line_label
 from .manual import ManualAssignments
 
-# 전체 9개 라인이 분배 대상 (각 라인 1명)
-DAILY_TARGET_LINES = list(TARGET_LINES)
+# 자동 분배 대상 라인 — 1라인(김민웅) · 8라인(노정문)이 일반 분배를 받고,
+# 9라인(크리수나)은 마스터 '특정라인 지정' 시트의 쿠션류 전용 코드만 받음.
+# 나머지 2~7라인은 분배 후보에서 제외 (excluded 처리).
+DAILY_TARGET_LINES = [1, 8, 9]
 LINE_HEADCOUNT = dict(_LINE_HC)
 
 # 기본 가중치 — 수량 우선 + 락 부합도
