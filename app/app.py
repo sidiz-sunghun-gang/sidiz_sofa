@@ -1674,7 +1674,6 @@ def tab_daily(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
                 st.write(f"**파일 절대경로**: `{full_path}`")
                 st.write(f"**파일 존재**: {full_path.exists()}")
                 try:
-                    import pandas as pd
                     xls = pd.ExcelFile(full_path)
                     st.write(f"**엑셀 시트 목록**: {xls.sheet_names}")
                     if "셋트구분" in xls.sheet_names:
