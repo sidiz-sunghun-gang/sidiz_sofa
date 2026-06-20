@@ -1,4 +1,4 @@
-""라인별 분배 계획 서버 (Streamlit).
+"""라인별 분배 계획 서버 (Streamlit).
 
 사용:
     streamlit run app/app.py
