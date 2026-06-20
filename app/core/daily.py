@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Dict, List, Tuple
 
 import pandas as pd
@@ -22,11 +23,17 @@ from .split import SplitLock, distribute_rows_by_weight
 from .lines import TARGET_LINES, LINE_HEADCOUNT as _LINE_HC, line_label
 from .manual import ManualAssignments
 
-# 자동 분배 대상 라인 — 1라인(김민웅) · 8라인(노정문)이 일반 분배를 받고,
-# 9라인(크리수나)은 마스터 '특정라인 지정' 시트의 쿠션류 전용 코드만 받음.
-# 나머지 2~7라인은 분배 후보에서 제외 (excluded 처리).
-DAILY_TARGET_LINES = [1, 8, 9]
+# 분배 후보 라인 — 1~9라인 모두 (어디로 갈 수 있는지).
+# 9라인은 마스터 '특정라인 지정' 시트 코드만 받도록 line_rules.json에 이미 반영됨.
+DAILY_TARGET_LINES = list(TARGET_LINES)
 LINE_HEADCOUNT = dict(_LINE_HC)
+
+# 분배 풀 — 원본 "생산라인" 텍스트에 이 작업자 이름이 포함된 행만 자동 분배에 들어감.
+# 예: "(1라인) 김민웅" "(8라인) 크리수나" 행은 풀에 포함, "(9라인)반제품" "소파(재단)" 등은 제외.
+# 이름 기준이라 ERP의 라인 번호 표기가 달라져도 안전하게 필터됨.
+SOURCE_WORKERS: List[str] = ["김민웅", "크리수나"]
+# (하위호환 — 외부에서 import해 쓰는 곳이 있어 유지)
+SOURCE_LINES = [1, 9]
 
 # 기본 가중치 — 수량 우선 + 락 부합도
 DEFAULT_WEIGHTS = {"qty": 0.4, "sec": 0.15, "date": 0.2, "lock": 0.25}
@@ -37,6 +44,8 @@ def distribute_daily(
     rules: LineRules,
     *,
     target_lines: list[int] | None = None,
+    source_lines: list[int] | None = None,
+    source_workers: list[str] | None = None,
     headcount: Dict[int, int] | None = None,
     weights: Dict[str, float] | None = None,
     group_policy: GroupPolicy | None = None,
@@ -44,6 +53,13 @@ def distribute_daily(
     manual: ManualAssignments | None = None,
 ) -> dict:
     target_lines = target_lines or DAILY_TARGET_LINES
+    # 분배 풀:
+    #   - source_workers가 지정되면 "line" 텍스트에 그 이름이 포함된 행만 풀에 포함
+    #     (예: "(8라인) 크리수나" 행 ✓, "(9라인)반제품" 행 ✗)
+    #   - source_workers가 없으면 source_lines로 line_no 기준 필터 (하위호환)
+    #   - 둘 다 없으면 target_lines 사용 (종전 동작)
+    source_lines_eff = source_lines if source_lines is not None else target_lines
+    source_workers_eff = source_workers
     headcount = headcount or LINE_HEADCOUNT
     wt = {**DEFAULT_WEIGHTS, **(weights or {})}
     policy = group_policy or GroupPolicy()
@@ -59,8 +75,14 @@ def distribute_daily(
         work["plan_qty"] = 0
     work["plan_qty"] = pd.to_numeric(work["plan_qty"], errors="coerce").fillna(0)
 
-    # 분배 대상과 비대상 분리
-    is_target = work["line_no"].isin(target_lines)
+    # 분배 풀 결정 — 작업자 이름이 지정되면 우선 적용 (가장 정확함)
+    if source_workers_eff and "line" in work.columns:
+        line_text = work["line"].astype(str).fillna("")
+        is_target = pd.Series(False, index=work.index)
+        for w in source_workers_eff:
+            is_target = is_target | line_text.str.contains(re.escape(w), na=False, regex=True)
+    else:
+        is_target = work["line_no"].isin(source_lines_eff)
     excluded = work[~is_target].copy()
     target = work[is_target].copy()
 

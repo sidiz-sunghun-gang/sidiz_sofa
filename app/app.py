@@ -24,7 +24,7 @@ if str(BASE_DIR) not in sys.path:
 
 from core.loader import read_grd_excel  # noqa: E402
 from core.cumulative import process_cumulative  # noqa: E402
-from core.daily import distribute_daily, DAILY_TARGET_LINES, LINE_HEADCOUNT  # noqa: E402
+from core.daily import distribute_daily, DAILY_TARGET_LINES, LINE_HEADCOUNT, SOURCE_LINES, SOURCE_WORKERS  # noqa: E402
 from core.rules import LineRules, load_rules, save_rules, rules_from_dataframe  # noqa: E402
 from core.policy import GroupPolicy, load_policy, save_policy, DEFAULT_SPLIT_KEYWORDS  # noqa: E402
 from core.split import (  # noqa: E402
@@ -1634,8 +1634,20 @@ def tab_daily(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
         st.info("좌측에서 **당일분배 파일**을 업로드하세요.")
         return
 
+    # 분배 풀 안내 — 어떤 행이 자동 분배에 들어가는지 사용자에게 명시
+    src_names = " · ".join(SOURCE_WORKERS)
+    if "line" in df.columns:
+        line_text = df["line"].astype(str).fillna("")
+        pool_mask = pool_mask = line_text.str.contains("|".join(SOURCE_WORKERS), na=False)
+        pool_n = int(pool_mask.sum())
+        total_n = int(len(df))
+        st.caption(
+            f"📌 분배 풀: 원본 생산라인에 **{src_names}** 이름이 포함된 행만 1~9라인에 자동 분배 "
+            f"({pool_n:,}건 / 전체 {total_n:,}건). 나머지는 '(분배제외)'로 표시됩니다."
+        )
+
     res = distribute_daily(df, rules, group_policy=policy, split_lock=split_lock,
-                           manual=manual)
+                           manual=manual, source_workers=SOURCE_WORKERS)
     summary = res["summary"]
     combined = res["combined"]
     detail = res["detail"]
@@ -1997,7 +2009,8 @@ def tab_integrity(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock):
 
     cu_res = process_cumulative(cu_df) if cu_df is not None else {"detail": pd.DataFrame()}
     da_res = (
-        distribute_daily(da_df, rules, group_policy=policy, split_lock=split_lock)
+        distribute_daily(da_df, rules, group_policy=policy, split_lock=split_lock,
+                         source_workers=SOURCE_WORKERS)
         if da_df is not None else {"detail": pd.DataFrame()}
     )
 
