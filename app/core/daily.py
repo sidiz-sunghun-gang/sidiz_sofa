@@ -174,32 +174,49 @@ def distribute_daily(
     is_splittable = raw_keys.apply(policy.should_split)
     is_locked = target.index.isin(locked_assign.keys())
 
+    # 행별 가능 라인 미리 계산 — 코드 매칭 + 품목명 키워드 보강.
+    # 품목명에 '쿠션' 포함이면 마스터에 코드가 없어도 9라인 강제 (서비스투입/AS 미싱 등 신규/임시 코드 보호).
+    names_col = (
+        target.get("item_name", pd.Series([""] * len(target)))
+        .fillna("").astype(str)
+    )
+
+    def _row_allowed(code: str, name: str) -> list[int]:
+        al = rules.allowed_lines_for(str(code), lines=target_lines)
+        if "쿠션" in str(name or "") and 9 in target_lines:
+            return [9]
+        return al
+
+    row_allowed_map: Dict[int, list[int]] = {}
+    for idx in target.index:
+        c = str(target.loc[idx, "item_code"])
+        n = names_col.loc[idx]
+        row_allowed_map[idx] = _row_allowed(c, n)
+
     # 9라인(크리수나) 전용 코드는 수주건명 그룹에서 자동 분리.
     # 이유: 쿠션·커넥터·헤드레스트는 단차 품질 이슈가 없는 부속이라 한 라인 묶음 불필요.
     # 같은 수주에 9라인 전용 코드와 1~8라인 코드가 섞이면 교집합 ∅로 미지정되던 사고 방지.
-    line9_only_flags = []
-    for idx in target.index:
-        code = str(target.loc[idx, "item_code"])
-        al = rules.allowed_lines_for(code, lines=target_lines)
-        line9_only_flags.append(al == [9])
-    is_line9_only = pd.Series(line9_only_flags, index=target.index)
+    is_line9_only = pd.Series(
+        [row_allowed_map[idx] == [9] for idx in target.index],
+        index=target.index,
+    )
 
-    # 셋트구분: 마스터 '셋트구분' 시트의 (코드,색상) 매칭 행은 수주건명 무시하고
-    # 셋트번호+출고일자 단위로 그룹핑 (수주취소가 잦아 출고일로 묶음 관리하는 품목)
+    # 셋트구분: 마스터 '셋트구분' 시트의 (코드,색상) 매칭 행은 셋트번호로만 묶음.
+    # 같은 셋트번호 행은 출고일자와 무관하게 무조건 한 라인 — 좌/우 단차 품질 이슈 방지.
     set_keys = pd.Series([""] * len(target), index=target.index, dtype=object)
     if sets and sets.by_code_color:
         codes = target["item_code"].astype(str).fillna("") if "item_code" in target.columns else None
         colors = target["color"].astype(str).fillna("") if "color" in target.columns else None
-        ships = target["ship_date"].astype(str).fillna("") if "ship_date" in target.columns else None
-        for idx in target.index:
-            code = codes.loc[idx].strip() if codes is not None else ""
-            color = colors.loc[idx].strip() if colors is not None else ""
-            sn = sets.lookup(code, color)
-            if sn is None:
-                continue
-            ship = ships.loc[idx].strip() if ships is not None else ""
-            set_keys.loc[idx] = f"__set{sn}_{ship}"
+        if codes is not None and colors is not None:
+            for idx in target.index:
+                code = codes.loc[idx].strip()
+                color = colors.loc[idx].strip()
+                sn = sets.lookup(code, color)
+                if sn is not None:
+                    set_keys.loc[idx] = f"__set{sn}"
     has_set = set_keys != ""
+    # 셋트로 묶인 행은 9라인 전용 분리 대상에서 제외 — 셋트 묶음을 우선시킴
+    is_line9_only = is_line9_only & ~has_set
 
     # 그룹키 결정: 셋트 매칭 > 9라인 전용/빈/분할가능/락 → 단독, 그 외 → raw 수주건명
     fallback = raw_keys.where(
@@ -214,10 +231,8 @@ def distribute_daily(
         gdf = gdf[~gdf.index.isin(locked_assign)]
         if gdf.empty:
             continue
-        allowed_sets = [
-            set(rules.allowed_lines_for(c, lines=target_lines))
-            for c in gdf["item_code"].astype(str).tolist()
-        ]
+        # row_allowed_map 사용 — 코드 매칭 + 품목명 '쿠션' 키워드 보강이 모두 반영됨
+        allowed_sets = [set(row_allowed_map.get(i, list(target_lines))) for i in gdf.index]
         if allowed_sets:
             allowed = sorted(set.intersection(*allowed_sets))
         else:
