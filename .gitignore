@@ -21,6 +21,10 @@ app/storage/latest/meta.json
 .DS_Store
 Thumbs.db
 
+# Excel 락 파일 (작업 중 자동 생성)
+**/~$*.xlsx
+**/~$*.xls
+
 # ============= 영구화 포함 항목 (GitHub에 같이 커밋) =============
 # app/storage/config/line_rules.json       — 작업불가 규칙
 # app/storage/config/group_policy.json     — 수주건명 그룹 정책
