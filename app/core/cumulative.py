@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from .lines import TARGET_LINES
+from .lines import TARGET_LINES, line_label
 
 # 9개 라인 모두 분배 대상이자 표시 대상
 CUMUL_TARGET_LINES = list(TARGET_LINES)
@@ -28,8 +28,12 @@ def process_cumulative(
     if "wip_done" in work.columns:
         work = work[work["wip_done"].astype(str).str.upper().str.strip() != "Y"]
 
-    # 2) 라인 필터 (1/3/4/5라인만)
+    # 2) 라인 필터 — 신규 라인 매핑 적용 (담당자 이름 우선)
     work = work[work["line_no"].isin(target_lines)].copy()
+    # 원본 line 라벨 ('(4라인) 김진영' 등)을 신규 매핑 라벨('5라인 (김진영)')로 통일
+    work["line"] = work["line_no"].apply(
+        lambda x: line_label(int(x)) if pd.notna(x) else None
+    )
 
     # 3) 표시용 슬림 데이터 — 수주건명 바로 오른쪽에 품목명칭 배치
     display_cols = [

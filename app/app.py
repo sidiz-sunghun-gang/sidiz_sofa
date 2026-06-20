@@ -30,6 +30,8 @@ from core.policy import GroupPolicy, load_policy, save_policy, DEFAULT_SPLIT_KEY
 from core.split import (  # noqa: E402
     SplitLock, load_split_lock, save_split_lock, split_lock_from_dataframe,
 )
+from core.manual import ManualAssignments, load_manual, save_manual  # noqa: E402
+from core.lines import LINE_WORKERS, line_label  # noqa: E402
 from core.master import (  # noqa: E402
     ItemMaster, load_master_from_folder,
     pattern_common_name, exact_short_name,
@@ -1625,17 +1627,73 @@ def tab_cumulative():
                            "누적분배_라인별.csv", "text/csv")
 
 
-def tab_daily(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock):
+def tab_daily(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
+              manual: ManualAssignments | None = None):
     df = _load_df("daily")
     if df is None:
         st.info("좌측에서 **당일분배 파일**을 업로드하세요.")
         return
 
-    res = distribute_daily(df, rules, group_policy=policy, split_lock=split_lock)
+    res = distribute_daily(df, rules, group_policy=policy, split_lock=split_lock,
+                           manual=manual)
     summary = res["summary"]
     combined = res["combined"]
     detail = res["detail"]
     unassigned = res.get("unassigned_count", 0)
+
+    # ── 미지정 품목 수동 이동 UI (관리자만)
+    if is_admin() and unassigned > 0 and "배정라인" in detail.columns:
+        unassigned_rows = detail[detail["배정라인"] == "미지정"].copy()
+        if not unassigned_rows.empty:
+            with st.expander(
+                f"⚠️ 미지정 품목 {len(unassigned_rows)}건 — 라인 수동 배정",
+                expanded=True,
+            ):
+                st.caption(
+                    "마스터에 등록되지 않아 자동 분배가 안 된 품목입니다. "
+                    "라인을 선택하면 영구 저장되어 다음 분배부터 자동 적용됩니다."
+                )
+                # 품목코드별로 묶어서 표시 (중복 제거)
+                unique_codes = unassigned_rows[["제품코드", "수주건명", "품목명칭", "수량"]].drop_duplicates(subset=["제품코드"])
+                line_opts = ["(미지정 유지)"] + [
+                    line_label(ln) for ln in sorted(LINE_WORKERS.keys())
+                ]
+                for _, urow in unique_codes.iterrows():
+                    code = str(urow["제품코드"])
+                    name = str(urow.get("품목명칭", ""))
+                    c1, c2, c3 = st.columns([2, 4, 2])
+                    with c1:
+                        st.markdown(f"**`{code}`**")
+                    with c2:
+                        st.caption(name[:60] if name else "(품목명 없음)")
+                    with c3:
+                        current = manual.get(code) if manual else None
+                        default_idx = (
+                            line_opts.index(line_label(current))
+                            if current in LINE_WORKERS else 0
+                        )
+                        sel = st.selectbox(
+                            "이동 라인",
+                            options=line_opts,
+                            index=default_idx,
+                            key=f"manual_move_{code}",
+                            label_visibility="collapsed",
+                        )
+                        if st.button("저장", key=f"manual_save_{code}",
+                                     use_container_width=True):
+                            if sel == "(미지정 유지)":
+                                if manual:
+                                    manual.remove(code)
+                            else:
+                                # "1라인 (김민웅)" → 1
+                                import re as _re
+                                m = _re.search(r"(\d+)\s*라인", sel)
+                                if m and manual:
+                                    manual.set(code, int(m.group(1)))
+                            if manual:
+                                save_manual(storage.MANUAL_PATH, manual)
+                            st.success(f"{code} → {sel}")
+                            st.rerun()
 
     # --- KPI 카드 ---
     dist_rows = summary[summary["구분"] == "분배"] if "구분" in summary.columns else summary
@@ -2299,6 +2357,7 @@ def main():
     rules = load_rules(storage.RULES_PATH)
     policy = load_policy(storage.GROUP_POLICY_PATH)
     split_lock = load_split_lock(storage.SPLIT_LOCK_PATH)
+    manual = load_manual(storage.MANUAL_PATH)
     # 품목마스터/ 폴더의 모든 엑셀/CSV를 자동 로드 (UI 관리 없음)
     master, master_files = load_master_from_folder(storage.MASTER_FOLDER)
 
@@ -2313,7 +2372,7 @@ def main():
         with t1:
             tab_cumulative()
         with t2:
-            tab_daily(rules, policy, split_lock)
+            tab_daily(rules, policy, split_lock, manual)
         with t3:
             tab_integrity(rules, policy, split_lock)
         with t4:
@@ -2331,7 +2390,7 @@ def main():
         with t1:
             tab_cumulative()
         with t2:
-            tab_daily(rules, policy, split_lock)
+            tab_daily(rules, policy, split_lock, manual)
         with t3:
             tab_integrity(rules, policy, split_lock)
 

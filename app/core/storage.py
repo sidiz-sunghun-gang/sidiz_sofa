@@ -126,6 +126,7 @@ RULES_PATH = CONFIG_DIR / "line_rules.json"
 GROUP_POLICY_PATH = CONFIG_DIR / "group_policy.json"
 SPLIT_LOCK_PATH = CONFIG_DIR / "split_lock.json"
 ITEM_MASTER_PATH = CONFIG_DIR / "item_master.json"  # (deprecated 호환용)
+MANUAL_PATH = CONFIG_DIR / "manual_assignments.json"
 
 # 품목 마스터 폴더 — 사용자가 엑셀/CSV 파일을 두면 자동 로드됨
 MASTER_FOLDER = Path(__file__).resolve().parent.parent.parent / "품목마스터"

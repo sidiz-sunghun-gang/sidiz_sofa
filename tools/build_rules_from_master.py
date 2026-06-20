@@ -1,9 +1,14 @@
-"""마감작업자별 생산가능품목 엑셀 → line_rules.json 자동 생성.
+"""마스터 엑셀 → line_rules.json 자동 생성.
+
+처리 시트 2개:
+1) '품목군코드상세' — 작업자별 O/X 매트릭스 (일반 분배 대상)
+2) '특정라인 지정' — 9라인(크리수나) 전용 코드 목록
 
 규칙:
-- '품목군코드상세' 시트의 각 행에서 작업자 컬럼이 'O'가 아니면 그 라인의 작업불가 코드
-- '추출코드'는 prefix 형태(예: ACSB2904)라 색상 변형 모두 매칭되도록 pattern으로 등록
-- pattern 형태: '^<코드>' (코드로 시작하는 모든 품목)
+- 품목군코드상세: 작업자 컬럼이 'O'가 아닌 라인은 차단 패턴 등록 (prefix `^코드`).
+  단, 9라인(크리수나)은 무조건 차단 → 9라인은 일반 분배에 참여 안 함.
+- 특정라인 지정: 이 시트의 코드는 9라인 전용 → 1~8라인 모두 차단.
+  코드 형태가 다양하므로(전체 코드 또는 prefix) `^코드` pattern으로 등록.
 """
 from __future__ import annotations
 
@@ -21,58 +26,108 @@ from core.lines import LINE_WORKERS, WORKER_TO_LINE  # noqa: E402
 MASTER_FILE = ROOT / "품목마스터" / "마감작업자별 생산가능품목_코드목록_v2.xlsx"
 RULES_PATH = ROOT / "app" / "storage" / "config" / "line_rules.json"
 
+LINE_9 = 9  # 크리수나 (특정라인 전용)
+
+
+def collect_general_rules(forbidden: dict[int, set[str]]) -> int:
+    """품목군코드상세 시트 처리 — 일반 작업 가능 매트릭스.
+
+    9라인(크리수나)은 무조건 차단 → 일반 분배에서 제외.
+    """
+    df = pd.read_excel(MASTER_FILE, sheet_name="품목군코드상세", header=0)
+    print(f"[품목군코드상세] 행수: {len(df)}")
+
+    code_col = "추출코드" if "추출코드" in df.columns else None
+    if not code_col:
+        print("  ⚠ '추출코드' 컬럼 없음. 시트 무시.")
+        return 0
+
+    count = 0
+    for _, row in df.iterrows():
+        code = str(row[code_col]).strip()
+        if not code or code.lower() == "nan":
+            continue
+        # 메타 텍스트(괄호 시작 같은 안내문) 노이즈 제외
+        if code.startswith("(") or not any(c.isalnum() for c in code):
+            continue
+
+        # 일반 작업자 매트릭스 처리 (9라인 제외)
+        for worker, line_no in WORKER_TO_LINE.items():
+            if line_no == LINE_9:
+                continue  # 9라인은 일반 분배 제외 — 무조건 차단
+            if worker not in df.columns:
+                continue
+            cell = row[worker]
+            cell_str = str(cell).strip().upper() if pd.notna(cell) else ""
+            if cell_str != "O":
+                forbidden[line_no].add(f"^{code}")
+
+        # 9라인은 품목군코드상세의 모든 코드 차단 (특정라인 전용)
+        forbidden[LINE_9].add(f"^{code}")
+        count += 1
+    return count
+
+
+def collect_special_line_rules(forbidden: dict[int, set[str]]) -> int:
+    """특정라인 지정 시트 — 9라인 전용 코드.
+
+    이 시트의 코드는 1~8라인 모두 차단 (9라인에서만 가능).
+    9라인의 차단 목록에서는 이 코드들을 제거.
+    """
+    try:
+        df = pd.read_excel(MASTER_FILE, sheet_name="특정라인 지정", header=0)
+    except Exception as e:
+        print(f"[특정라인 지정] 시트 읽기 실패: {e}")
+        return 0
+    print(f"[특정라인 지정] 행수: {len(df)}")
+
+    # 첫 컬럼이 품목코드
+    code_col = df.columns[0]
+    count = 0
+    nineline_codes: set[str] = set()
+    for _, row in df.iterrows():
+        code = str(row[code_col]).strip()
+        if not code or code.lower() == "nan" or code == "품목코드":
+            continue
+        if not any(c.isalnum() for c in code):
+            continue
+
+        # 1~8라인 차단 (9라인 외 모두 작업 불가)
+        for line_no in range(1, 9):
+            forbidden[line_no].add(f"^{code}")
+        # 9라인 차단 목록에서는 제거 (9라인만 가능하게)
+        nineline_codes.add(f"^{code}")
+        count += 1
+
+    # 9라인 차단 목록 정리 — 특정라인 코드는 9라인에서 허용
+    forbidden[LINE_9] -= nineline_codes
+    return count
+
 
 def main():
     if not MASTER_FILE.exists():
         print(f"파일 없음: {MASTER_FILE}")
         return 1
 
-    # 품목군코드상세 시트 — 첫 행이 헤더 (구분/NO/품목군/추출코드/품목명칭/작업자들)
-    df = pd.read_excel(MASTER_FILE, sheet_name="품목군코드상세", header=0)
-    print(f"시트 행수: {len(df)}")
-    print(f"컬럼: {list(df.columns)}")
-
-    # 작업자 컬럼 (이름과 일치)
-    worker_cols = {name: name for name in WORKER_TO_LINE.keys() if name in df.columns}
-    missing = [n for n in WORKER_TO_LINE.keys() if n not in df.columns]
-    if missing:
-        print(f"⚠️ 엑셀에 없는 작업자 컬럼: {missing}")
-
-    # 각 라인별로 차단할 prefix 코드 모으기
     forbidden: dict[int, set[str]] = {ln: set() for ln in LINE_WORKERS.keys()}
 
-    code_col = "추출코드" if "추출코드" in df.columns else None
-    if not code_col:
-        print("'추출코드' 컬럼이 없습니다.")
-        return 1
+    n_general = collect_general_rules(forbidden)
+    n_special = collect_special_line_rules(forbidden)
 
-    for _, row in df.iterrows():
-        code = str(row[code_col]).strip()
-        if not code or code.lower() == "nan":
-            continue
-        for worker, line_no in WORKER_TO_LINE.items():
-            if worker not in df.columns:
-                continue
-            cell = row[worker]
-            cell_str = str(cell).strip().upper() if pd.notna(cell) else ""
-            if cell_str != "O":
-                # O가 아니면 해당 라인에서 작업 불가
-                forbidden[line_no].add(f"^{code}")
+    print(f"\n[처리 결과] 일반 코드 {n_general}개, 9라인 전용 코드 {n_special}개")
 
-    # JSON 빌드
     out = {"exact": {}, "pattern": {}}
     for ln, patterns in sorted(forbidden.items()):
         if patterns:
             out["pattern"][str(ln)] = sorted(patterns)
 
-    # 요약 출력
     print("\n[라인별 작업불가 패턴 개수]")
     for ln in sorted(LINE_WORKERS.keys()):
         worker = LINE_WORKERS[ln]
         cnt = len(out["pattern"].get(str(ln), []))
-        print(f"  {ln}라인 ({worker}): {cnt}개 차단 패턴")
+        suffix = " (9라인 전용 — 일반 분배 제외)" if ln == LINE_9 else ""
+        print(f"  {ln}라인 ({worker}): {cnt}개 차단 패턴{suffix}")
 
-    # 저장
     RULES_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(RULES_PATH, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)

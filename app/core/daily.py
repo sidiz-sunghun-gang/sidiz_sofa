@@ -19,7 +19,8 @@ import pandas as pd
 from .rules import LineRules
 from .policy import GroupPolicy
 from .split import SplitLock, distribute_rows_by_weight
-from .lines import TARGET_LINES, LINE_HEADCOUNT as _LINE_HC
+from .lines import TARGET_LINES, LINE_HEADCOUNT as _LINE_HC, line_label
+from .manual import ManualAssignments
 
 # 전체 9개 라인이 분배 대상 (각 라인 1명)
 DAILY_TARGET_LINES = list(TARGET_LINES)
@@ -38,12 +39,14 @@ def distribute_daily(
     weights: Dict[str, float] | None = None,
     group_policy: GroupPolicy | None = None,
     split_lock: SplitLock | None = None,
+    manual: ManualAssignments | None = None,
 ) -> dict:
     target_lines = target_lines or DAILY_TARGET_LINES
     headcount = headcount or LINE_HEADCOUNT
     wt = {**DEFAULT_WEIGHTS, **(weights or {})}
     policy = group_policy or GroupPolicy()
     lock = split_lock or SplitLock()
+    man = manual or ManualAssignments()
 
     work = df.copy()
 
@@ -62,7 +65,7 @@ def distribute_daily(
     # --- 비대상: 원본 라인 그대로 ---
     if not excluded.empty:
         excluded["배정라인"] = excluded["line_no"].apply(
-            lambda x: f"{int(x)}라인" if pd.notna(x) else "미지정"
+            lambda x: line_label(int(x)) if pd.notna(x) else "미지정"
         )
         excluded["후보라인"] = "(분배제외)"
 
@@ -121,7 +124,7 @@ def distribute_daily(
             row_sorted = sorted(row_idx, key=lambda i: -float(target.loc[i, "plan_sec"]))
             line_sorted = sorted(line_per_row, key=lambda l: -usable.get(l, 0))
             type_label = "고정" if lk_type == "exact" else f"패턴 {lk_key}"
-            cand_text = ",".join(f"{l}라인({type_label})" for l in sorted(usable.keys()))
+            cand_text = ",".join(f"{line_label(l)}({type_label})" for l in sorted(usable.keys()))
             for idx, ln in zip(row_sorted, line_sorted):
                 locked_assign[idx] = ln
                 locked_cand_str[idx] = cand_text
@@ -219,16 +222,34 @@ def distribute_daily(
 
     # 락된 행 먼저 결과에 반영
     for idx, ln in locked_assign.items():
-        assign_by_idx[idx] = f"{ln}라인"
-        cand_by_idx[idx] = locked_cand_str.get(idx, f"{ln}라인(고정)")
+        assign_by_idx[idx] = line_label(ln)
+        cand_by_idx[idx] = locked_cand_str.get(idx, f"{line_label(ln)}(고정)")
 
     for g in groups:
         allowed = g["allowed"]
-        cand_str = ",".join(f"{l}라인" for l in allowed) if allowed else ""
+        cand_str = ",".join(line_label(l) for l in allowed) if allowed else ""
+
+        # 수동 배정 우선 — 그룹 안 행이 manual에 등록되어 있으면 그 라인으로
+        manual_ln: int | None = None
+        if man.by_code:
+            for idx in g["indices"]:
+                code = str(target.loc[idx, "item_code"])
+                m = man.get(code)
+                if m is not None:
+                    manual_ln = m
+                    break
+        if manual_ln is not None:
+            for idx in g["indices"]:
+                assign_by_idx[idx] = line_label(manual_ln)
+                cand_by_idx[idx] = f"{line_label(manual_ln)}(수동)"
+                load_sec[manual_ln] = load_sec.get(manual_ln, 0) + float(target.loc[idx, "plan_sec"])
+                load_qty[manual_ln] = load_qty.get(manual_ln, 0) + float(target.loc[idx, "plan_qty"])
+            continue
+
         if not allowed:
             for idx in g["indices"]:
-                assign_by_idx[idx] = "UNASSIGNED"
-                cand_by_idx[idx] = cand_str
+                assign_by_idx[idx] = "미지정"
+                cand_by_idx[idx] = cand_str or "(마스터에 없음)"
             continue
 
         best_line = None
@@ -270,7 +291,7 @@ def distribute_daily(
         for d, q in g["date_qty"].items():
             load_date_qty[best_line][d] = load_date_qty[best_line].get(d, 0.0) + q
         for idx in g["indices"]:
-            assign_by_idx[idx] = f"{best_line}라인"
+            assign_by_idx[idx] = line_label(best_line)
             cand_by_idx[idx] = cand_str
 
     target["배정라인"] = target.index.map(assign_by_idx)
@@ -302,7 +323,7 @@ def distribute_daily(
     for l in target_lines:
         hc = headcount.get(l, 1)
         rows.append({
-            "라인": f"{l}라인", "구분": "분배", "인원": hc,
+            "라인": line_label(l), "구분": "분배", "인원": hc,
             "총 계획시간(초)": int(load_sec[l]),
             "총 계획량": int(load_qty[l]),
             "인당 부하(초)": int(load_sec[l] / max(1, hc)),
@@ -319,9 +340,9 @@ def distribute_daily(
                 "총 계획량": int(r["plan_qty"]),
                 "인당 부하(초)": "-",
             })
-    unassigned_n = int((target_sorted["배정라인"] == "UNASSIGNED").sum()) if "배정라인" in target_sorted.columns else 0
+    unassigned_n = int((target_sorted["배정라인"] == "미지정").sum()) if "배정라인" in target_sorted.columns else 0
     if unassigned_n > 0:
-        un = target_sorted[target_sorted["배정라인"] == "UNASSIGNED"]
+        un = target_sorted[target_sorted["배정라인"] == "미지정"]
         rows.append({
             "라인": "미배정", "구분": "오류", "인원": 0,
             "총 계획시간(초)": int(un["plan_sec"].sum()),
