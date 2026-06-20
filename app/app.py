@@ -1647,6 +1647,10 @@ def tab_daily(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
             f"📌 분배 풀: 원본 생산라인에 **{src_names}** 이름이 포함된 행만 1~9라인에 자동 분배 "
             f"({pool_n:,}건 / 전체 {total_n:,}건). 나머지는 '(분배제외)'로 표시됩니다."
         )
+    # 셋트구분 로드 상태 — 매핑 0이면 마스터 경로 문제 의심
+    set_n = len(set_groups.by_code_color) if set_groups else 0
+    set_icon = "✅" if set_n > 0 else "⚠️"
+    st.caption(f"{set_icon} 셋트구분 매핑: **{set_n}쌍** 로드됨 (같은 셋트의 행은 한 라인에 묶임).")
 
     res = distribute_daily(df, rules, group_policy=policy, split_lock=split_lock,
                            manual=manual, source_workers=SOURCE_WORKERS,
@@ -2378,10 +2382,11 @@ def main():
     # 품목마스터/ 폴더의 모든 엑셀/CSV를 자동 로드 (UI 관리 없음)
     master, master_files = load_master_from_folder(storage.MASTER_FOLDER)
     # 셋트구분 시트 — 마감작업자별 엑셀에서 직접 읽음
+    # master_files는 파일 이름만 반환하므로 MASTER_FOLDER와 합쳐 절대 경로 생성.
     set_groups = SetGroups()
-    for fp in master_files:
-        if "마감작업자별" in str(fp) or "생산가능품목" in str(fp):
-            set_groups = load_set_groups(fp)
+    for fp_name in master_files:
+        if "마감작업자별" in fp_name or "생산가능품목" in fp_name:
+            set_groups = load_set_groups(storage.MASTER_FOLDER / fp_name)
             break
 
     if is_admin():
