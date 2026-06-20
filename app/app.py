@@ -1658,20 +1658,16 @@ def tab_daily(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
             folder = storage.MASTER_FOLDER
             st.write(f"**MASTER_FOLDER 경로**: `{folder}`")
             st.write(f"**폴더 존재**: {folder.exists()}")
+            files_in_folder = []
             if folder.exists():
                 files_in_folder = [p.name for p in folder.iterdir() if p.is_file()]
                 st.write(f"**폴더 내 파일 목록**: {files_in_folder}")
-            try:
-                from core.master import load_master_from_folder as _lm
-                _, mfiles = _lm(folder)
-                st.write(f"**load_master_from_folder 결과**: {mfiles}")
-            except Exception as e:
-                st.write(f"**load_master_from_folder 에러**: {e}")
-            matched = None
-            for fn in master_files:
-                if "마감작업자별" in fn or "생산가능품목" in fn:
-                    matched = fn
-                    break
+            matched = next(
+                (n for n in files_in_folder
+                 if ("마감작업자별" in n or "생산가능품목" in n)
+                 and n.lower().endswith((".xlsx", ".xls"))),
+                None,
+            )
             st.write(f"**매칭된 마스터 파일명**: {matched}")
             if matched:
                 full_path = folder / matched
@@ -1685,7 +1681,7 @@ def tab_daily(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
                         df_dbg = pd.read_excel(full_path, sheet_name="셋트구분", header=0)
                         st.write(f"**셋트구분 시트 컬럼**: {list(df_dbg.columns)}")
                         st.write(f"**셋트구분 시트 행수**: {len(df_dbg)}")
-                        st.write(f"**첫 3행 미리보기**:")
+                        st.write("**첫 3행 미리보기**:")
                         st.dataframe(df_dbg.head(3))
                     else:
                         st.error("❌ '셋트구분' 시트가 엑셀에 없음 — 마스터 파일이 옛 버전일 가능성")
@@ -2421,13 +2417,19 @@ def main():
     manual = load_manual(storage.MANUAL_PATH)
     # 품목마스터/ 폴더의 모든 엑셀/CSV를 자동 로드 (UI 관리 없음)
     master, master_files = load_master_from_folder(storage.MASTER_FOLDER)
-    # 셋트구분 시트 — 마감작업자별 엑셀에서 직접 읽음
-    # master_files는 파일 이름만 반환하므로 MASTER_FOLDER와 합쳐 절대 경로 생성.
+    # 셋트구분 시트 — 폴더에서 직접 마감작업자별 파일을 검색.
+    # load_master_from_folder는 '품목코드' 컬럼이 있는 파일만 인정하므로 마감작업자별 엑셀이
+    # master_files에서 누락된다 → 폴더를 직접 스캔하여 셋트구분 시트만 로드.
     set_groups = SetGroups()
-    for fp_name in master_files:
-        if "마감작업자별" in fp_name or "생산가능품목" in fp_name:
-            set_groups = load_set_groups(storage.MASTER_FOLDER / fp_name)
-            break
+    if storage.MASTER_FOLDER.exists():
+        for fp in storage.MASTER_FOLDER.iterdir():
+            if not fp.is_file():
+                continue
+            if fp.suffix.lower() not in (".xlsx", ".xls"):
+                continue
+            if "마감작업자별" in fp.name or "생산가능품목" in fp.name:
+                set_groups = load_set_groups(fp)
+                break
 
     if is_admin():
         t1, t2, t3, t4, t5 = st.tabs([
