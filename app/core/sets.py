@@ -14,15 +14,20 @@ from typing import Dict, Tuple
 import pandas as pd
 
 
+def _norm(s: str) -> str:
+    """대소문자·공백 차이를 흡수하는 정규화 — 색상/코드 표기 흔들림 방어."""
+    return str(s or "").strip().upper()
+
+
 @dataclass
 class SetGroups:
-    # (품목코드, 색상) → 셋트번호
+    # (품목코드_norm, 색상_norm) → 셋트번호 — 정규화된 키로 저장
     by_code_color: Dict[Tuple[str, str], int] = field(default_factory=dict)
 
     def lookup(self, item_code: str, color: str) -> int | None:
         if not item_code:
             return None
-        key = (str(item_code).strip(), str(color or "").strip())
+        key = (_norm(item_code), _norm(color))
         return self.by_code_color.get(key)
 
     def __bool__(self) -> bool:
@@ -58,8 +63,8 @@ def load_set_groups(master_path: Path | str, sheet: str = "셋트구분") -> Set
     mapping: Dict[Tuple[str, str], int] = {}
     for _, row in df.iterrows():
         set_v = str(row[set_col]).strip()
-        code = str(row[code_col]).strip()
-        color = str(row[color_col]).strip()
+        code = _norm(row[code_col])
+        color = _norm(row[color_col])
         if not (set_v and code):
             continue
         try:
