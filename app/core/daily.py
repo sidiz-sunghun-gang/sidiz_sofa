@@ -20,9 +20,12 @@ import pandas as pd
 from .rules import LineRules
 from .policy import GroupPolicy
 from .split import SplitLock, distribute_rows_by_weight
-from .lines import TARGET_LINES, LINE_HEADCOUNT as _LINE_HC, line_label
+from .lines import TARGET_LINES, LINE_HEADCOUNT as _LINE_HC, line_label, LINE_FINISHED
 from .manual import ManualAssignments
 from .sets import SetGroups
+
+# 품목명에 이 키워드가 포함되면 반제품 라인 전용 (소파 외 부속)
+FINISHED_KEYWORDS: List[str] = ["쿠션", "헤드레스트", "커넥터", "봉제"]
 
 # 분배 후보 라인 — 1~9라인 모두 (어디로 갈 수 있는지).
 # 9라인은 마스터 '특정라인 지정' 시트 코드만 받도록 line_rules.json에 이미 반영됨.
@@ -183,8 +186,12 @@ def distribute_daily(
 
     def _row_allowed(code: str, name: str) -> list[int]:
         al = rules.allowed_lines_for(str(code), lines=target_lines)
-        if "쿠션" in str(name or "") and 9 in target_lines:
-            return [9]
+        # 품목명에 반제품 키워드(쿠션·헤드레스트·커넥터·봉제) 포함 → 반제품 라인 전용
+        nm = str(name or "")
+        if LINE_FINISHED in target_lines:
+            for kw in FINISHED_KEYWORDS:
+                if kw in nm:
+                    return [LINE_FINISHED]
         return al
 
     row_allowed_map: Dict[int, list[int]] = {}
@@ -193,11 +200,11 @@ def distribute_daily(
         n = names_col.loc[idx]
         row_allowed_map[idx] = _row_allowed(c, n)
 
-    # 9라인(크리수나) 전용 코드는 수주건명 그룹에서 자동 분리.
-    # 이유: 쿠션·커넥터·헤드레스트는 단차 품질 이슈가 없는 부속이라 한 라인 묶음 불필요.
-    # 같은 수주에 9라인 전용 코드와 1~8라인 코드가 섞이면 교집합 ∅로 미지정되던 사고 방지.
+    # 반제품 라인 전용 코드는 수주건명 그룹에서 자동 분리.
+    # 이유: 쿠션·헤드레스트·커넥터·봉제는 단차 품질 이슈 없는 부속이라 한 라인 묶음 불필요.
+    # 같은 수주에 반제품 전용 코드와 1~8라인 코드가 섞이면 교집합 ∅로 미지정되던 사고 방지.
     is_line9_only = pd.Series(
-        [row_allowed_map[idx] == [9] for idx in target.index],
+        [row_allowed_map[idx] == [LINE_FINISHED] for idx in target.index],
         index=target.index,
     )
 

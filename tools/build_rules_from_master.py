@@ -1,14 +1,15 @@
 """마스터 엑셀 → line_rules.json 자동 생성.
 
 처리 시트 2개:
-1) '품목군코드상세' — 작업자별 O/X 매트릭스 (일반 분배 대상)
-2) '특정라인 지정' — 9라인(크리수나) 전용 코드 목록
+1) '품목군코드상세' — 소파류 작업자 O/X 매트릭스 (1~8라인 분배 대상)
+2) '특정라인 지정' — 반제품 라인(10) 전용 코드 (소파 외 부속)
+추가:
+- 품목명에 '쿠션·헤드레스트·커넥터·봉제' 포함 코드도 반제품 라인 전용으로 자동 등록.
 
 규칙:
 - 품목군코드상세: 작업자 컬럼이 'O'가 아닌 라인은 차단 패턴 등록 (prefix `^코드`).
-  단, 9라인(크리수나)은 무조건 차단 → 9라인은 일반 분배에 참여 안 함.
-- 특정라인 지정: 이 시트의 코드는 9라인 전용 → 1~8라인 모두 차단.
-  코드 형태가 다양하므로(전체 코드 또는 prefix) `^코드` pattern으로 등록.
+  반제품 라인은 무조건 차단 → 일반 분배 참여 안 함.
+- 특정라인 지정: 이 시트의 코드는 반제품 라인 전용 → 1~8라인 모두 차단.
 """
 from __future__ import annotations
 
@@ -21,12 +22,13 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
-from core.lines import LINE_WORKERS, WORKER_TO_LINE  # noqa: E402
+from core.lines import LINE_WORKERS, WORKER_TO_LINE, LINE_FINISHED  # noqa: E402
 
 MASTER_FILE = ROOT / "품목마스터" / "마감작업자별 생산가능품목_코드목록_v2.xlsx"
 RULES_PATH = ROOT / "app" / "storage" / "config" / "line_rules.json"
 
-LINE_9 = 9  # 크리수나 (특정라인 전용)
+LINE_9 = LINE_FINISHED  # 반제품 라인 (소파 외 부속 전용)
+FINISHED_KEYWORDS = ["쿠션", "헤드레스트", "커넥터", "봉제"]
 
 
 def collect_general_rules(forbidden: dict[int, set[str]]) -> int:
@@ -69,13 +71,16 @@ def collect_general_rules(forbidden: dict[int, set[str]]) -> int:
 
 
 def collect_cushion_rules(forbidden: dict[int, set[str]]) -> int:
-    """품목명칭에 '쿠션' 포함된 코드는 9라인(크리수나) 전용으로 강제.
+    """품목명칭에 반제품 키워드(쿠션·헤드레스트·커넥터·봉제) 포함 코드는 반제품 라인 전용.
 
-    품목군코드상세 + 품목코드_명칭 맵핑 두 소스를 모두 검사하여 매칭된 코드를
-    1~8라인 차단 + 9라인 허용으로 등록한다. prefix(^코드) 패턴 사용.
+    품목군코드상세 + 품목코드_명칭 맵핑 두 소스를 모두 검사. 매칭된 코드를
+    1~8라인 차단 + 반제품 라인 허용으로 등록. prefix(^코드) 패턴.
     """
     nineline_codes: set[str] = set()
     count = 0
+
+    def _is_finished(name: str) -> bool:
+        return any(kw in name for kw in FINISHED_KEYWORDS)
 
     # 1) 품목군코드상세 — 추출코드(prefix) + 품목명칭
     df = pd.read_excel(MASTER_FILE, sheet_name="품목군코드상세", header=0).fillna("")
@@ -87,7 +92,7 @@ def collect_cushion_rules(forbidden: dict[int, set[str]]) -> int:
             name = str(row[name_col]).strip()
             if not code or code.lower() == "nan":
                 continue
-            if "쿠션" not in name:
+            if not _is_finished(name):
                 continue
             for line_no in range(1, 9):
                 forbidden[line_no].add(f"^{code}")
@@ -97,7 +102,6 @@ def collect_cushion_rules(forbidden: dict[int, set[str]]) -> int:
     # 2) 품목코드_명칭 맵핑 — 정확 코드 + 품목명
     mapping_file = MASTER_FILE.parent / "품목코드_명칭 맵핑.xlsx"
     if mapping_file.exists():
-        # 헤더가 둘째 행에 있어 자동 감지
         raw = pd.read_excel(mapping_file, header=None, dtype=str).fillna("")
         header_row = None
         for idx in range(min(5, len(raw))):
@@ -115,9 +119,8 @@ def collect_cushion_rules(forbidden: dict[int, set[str]]) -> int:
                     name = str(row[name_col2]).strip()
                     if not code or code.lower() == "nan":
                         continue
-                    if "쿠션" not in name:
+                    if not _is_finished(name):
                         continue
-                    # 정확 코드 prefix — 색상이 붙어도 매칭되도록 ^코드 사용
                     for line_no in range(1, 9):
                         forbidden[line_no].add(f"^{code}")
                     nineline_codes.add(f"^{code}")
@@ -185,7 +188,7 @@ def main():
     for ln in sorted(LINE_WORKERS.keys()):
         worker = LINE_WORKERS[ln]
         cnt = len(out["pattern"].get(str(ln), []))
-        suffix = " (9라인 전용 — 일반 분배 제외)" if ln == LINE_9 else ""
+        suffix = " (반제품 전용 — 일반 분배 제외)" if ln == LINE_9 else ""
         print(f"  {ln}라인 ({worker}): {cnt}개 차단 패턴{suffix}")
 
     RULES_PATH.parent.mkdir(parents=True, exist_ok=True)
