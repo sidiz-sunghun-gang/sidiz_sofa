@@ -56,37 +56,52 @@ def save_upload(kind: Kind, data: bytes, original_name: str) -> Path:
 def delete_upload(kind: Kind) -> bool:
     """저장된 최신 파일 + 메타에서 해당 종류 삭제. 삭제했으면 True."""
     path = LATEST_DIR / _FILENAME[kind]
-    removed = False
     if path.exists():
         try:
             path.unlink()
-            removed = True
         except OSError:
-            pass
-    # 메타에서도 제거
-    meta = latest_meta()
-    if kind in meta:
-        meta.pop(kind, None)
-        if meta:
-            with open(META_PATH, "w", encoding="utf-8") as f:
-                json.dump(meta, f, ensure_ascii=False, indent=2)
-        else:
-            # 메타가 비면 파일도 삭제
+            # Windows 파일 잠금: unlink 실패 시 파일을 0바이트로 덮어써서 무효화.
+            # 메타는 아래에서 반드시 제거하므로 다음 로드 시 무시된다.
             try:
-                if META_PATH.exists():
-                    META_PATH.unlink()
+                path.write_bytes(b"")
             except OSError:
                 pass
-        removed = True
-    return removed
+
+    # 메타에서 제거 — 파일 삭제 성공 여부와 무관하게 항상 실행
+    meta = latest_meta()
+    meta.pop(kind, None)
+    if meta:
+        fd, tmp = tempfile.mkstemp(prefix=".meta_", suffix=".tmp", dir=str(META_PATH.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, META_PATH)
+        except Exception:
+            try:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+            except OSError:
+                pass
+    else:
+        try:
+            if META_PATH.exists():
+                META_PATH.unlink()
+        except OSError:
+            pass
+    return True
 
 
 def load_latest_bytes(kind: Kind) -> Optional[bytes]:
+    # 메타에 없으면 파일이 남아있어도 삭제된 것으로 간주
+    if kind not in latest_meta():
+        return None
     path = LATEST_DIR / _FILENAME[kind]
     if not path.exists():
         return None
-    with open(path, "rb") as f:
-        return f.read()
+    data = path.read_bytes()
+    if not data:  # 0바이트 = 삭제 실패 후 덮어쓴 파일
+        return None
+    return data
 
 
 def latest_meta() -> dict:

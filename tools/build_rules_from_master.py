@@ -188,7 +188,7 @@ def main():
     for ln in sorted(LINE_WORKERS.keys()):
         worker = LINE_WORKERS[ln]
         cnt = len(out["pattern"].get(str(ln), []))
-        suffix = " (반제품 전용 — 일반 분배 제외)" if ln == LINE_9 else ""
+        suffix = " (반제품 전용 - 일반 분배 제외)" if ln == LINE_9 else ""
         print(f"  {ln}라인 ({worker}): {cnt}개 차단 패턴{suffix}")
 
     RULES_PATH.parent.mkdir(parents=True, exist_ok=True)
