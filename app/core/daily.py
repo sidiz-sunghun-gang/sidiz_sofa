@@ -74,6 +74,11 @@ def distribute_daily(
 
     work = df.copy()
 
+    # (N라인) 형태 ERP 행만 처리 — 재단·원단·반제품 등 비분배 공정 완전 제외
+    # line_no 가 target_lines(1~9) 범위를 벗어나는 행은 분배·표시 대상에서 모두 제거
+    if "line_no" in work.columns:
+        work = work[work["line_no"].isin(target_lines)].copy()
+
     if "plan_sec" not in work.columns:
         work["plan_sec"] = 0
     work["plan_sec"] = pd.to_numeric(work["plan_sec"], errors="coerce").fillna(0)
