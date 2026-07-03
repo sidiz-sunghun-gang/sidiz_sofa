@@ -39,6 +39,10 @@ SOURCE_WORKERS: List[str] = ["김민웅", "크리수나"]
 # (하위호환 — 외부에서 import해 쓰는 곳이 있어 유지)
 SOURCE_LINES = [1, 8]
 
+# ERP 생산라인 텍스트에 이 문자열이 포함된 행은 분배·표시 모두 제외.
+# line_no 가 유효하게 해석되더라도(예: 담당자명이 함께 붙어있는 경우) 강제 제외한다.
+EXCLUDE_LINE_PATTERNS: List[str] = ["의자(재단)", "소파(재단)", "소파(고객만족)"]
+
 # 기본 가중치 — 수량 우선 + 락 부합도
 DEFAULT_WEIGHTS = {"qty": 0.4, "sec": 0.15, "date": 0.2, "lock": 0.25}
 
@@ -78,6 +82,14 @@ def distribute_daily(
     # line_no 가 target_lines(1~9) 범위를 벗어나는 행은 분배·표시 대상에서 모두 제거
     if "line_no" in work.columns:
         work = work[work["line_no"].isin(target_lines)].copy()
+
+    # 명시적 제외 ERP 생산라인 — 담당자명이 함께 붙어 line_no 가 유효하게 해석되더라도 강제 제거
+    if EXCLUDE_LINE_PATTERNS and "line" in work.columns:
+        line_text = work["line"].astype(str).fillna("")
+        exc_mask = pd.Series(False, index=work.index)
+        for pat in EXCLUDE_LINE_PATTERNS:
+            exc_mask = exc_mask | line_text.str.contains(re.escape(pat), na=False, regex=True)
+        work = work[~exc_mask].copy()
 
     if "plan_sec" not in work.columns:
         work["plan_sec"] = 0
