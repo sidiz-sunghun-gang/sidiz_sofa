@@ -142,36 +142,6 @@ GROUP_POLICY_PATH = CONFIG_DIR / "group_policy.json"
 SPLIT_LOCK_PATH = CONFIG_DIR / "split_lock.json"
 ITEM_MASTER_PATH = CONFIG_DIR / "item_master.json"  # (deprecated 호환용)
 MANUAL_PATH = CONFIG_DIR / "manual_assignments.json"
-LINE_CAPS_PATH = CONFIG_DIR / "line_item_caps.json"
-
-
-def load_line_caps() -> dict:
-    """Load line item caps: {line_no (int): [{"code": str, "max": int, "label": str}]}"""
-    if not LINE_CAPS_PATH.exists():
-        return {}
-    try:
-        with open(LINE_CAPS_PATH, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-        return {int(k): v for k, v in raw.items()}
-    except Exception:
-        return {}
-
-
-def save_line_caps(caps: dict) -> None:
-    """Save line item caps to JSON atomically."""
-    LINE_CAPS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=".caps_", suffix=".tmp", dir=str(LINE_CAPS_PATH.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({str(k): v for k, v in caps.items()}, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, LINE_CAPS_PATH)
-    except Exception:
-        try:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
-        except OSError:
-            pass
-        raise
 # (재배포 트리거용 마커 — Cloud 캐시 무효화)
 
 # 품목 마스터 폴더 — 사용자가 엑셀/CSV 파일을 두면 자동 로드됨

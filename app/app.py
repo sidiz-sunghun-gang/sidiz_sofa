@@ -1630,8 +1630,7 @@ def tab_cumulative():
 
 def tab_daily(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
               manual: ManualAssignments | None = None,
-              set_groups: SetGroups | None = None,
-              line_item_caps: dict | None = None):
+              set_groups: SetGroups | None = None):
     df = _load_df("daily")
     if df is None:
         st.info("좌측에서 **당일분배 파일**을 업로드하세요.")
@@ -1688,72 +1687,9 @@ def tab_daily(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
                 except Exception as e:
                     st.write(f"**엑셀 읽기 에러**: {e}")
 
-    # 라인별 품목 배정 횟수 제한 UI (관리자 전용)
-    caps = line_item_caps if line_item_caps is not None else storage.load_line_caps()
-    if is_admin():
-        with st.expander("🔢 라인별 품목 배정 횟수 제한", expanded=False):
-            st.caption(
-                "특정 라인에 특정 품목코드(앞부분 일치)가 하루 분배에서 최대 N개만 배정되도록 제한합니다. "
-                "cap이 초과되는 라인은 해당 품목에 대해 후보에서 제외되고, 나머지 허용 라인에 배정됩니다."
-            )
-            cap_rows = []
-            for ln_k, entries in sorted(caps.items()):
-                for entry in entries:
-                    cap_rows.append({
-                        "라인": line_label(ln_k),
-                        "품목코드(prefix)": entry["code"],
-                        "최대횟수": entry.get("max", 1),
-                        "설명": entry.get("label", ""),
-                        "_ln": ln_k,
-                        "_code": entry["code"],
-                    })
-            if cap_rows:
-                for i, row in enumerate(cap_rows):
-                    rc1, rc2, rc3, rc4, rc5 = st.columns([2, 2, 1, 2, 1])
-                    rc1.write(row["라인"])
-                    rc2.code(row["품목코드(prefix)"], language=None)
-                    rc3.write(f"최대 **{row['최대횟수']}** 개")
-                    rc4.caption(row["설명"] or "—")
-                    if rc5.button("삭제", key=f"del_cap_{i}"):
-                        ln_k = row["_ln"]
-                        code_k = row["_code"]
-                        caps[ln_k] = [e for e in caps.get(ln_k, []) if e["code"] != code_k]
-                        if not caps[ln_k]:
-                            del caps[ln_k]
-                        storage.save_line_caps(caps)
-                        st.rerun()
-            else:
-                st.info("등록된 제한 규칙이 없습니다.")
-            st.divider()
-            st.markdown("**새 규칙 추가**")
-            _line_opts = {line_label(ln_k): ln_k for ln_k in sorted(LINE_WORKERS.keys())}
-            nc1, nc2, nc3, nc4 = st.columns([2, 2, 1, 2])
-            with nc1:
-                _sel_line = st.selectbox("라인", options=list(_line_opts.keys()), key="cap_new_line")
-            with nc2:
-                _new_code = st.text_input("품목코드 (앞부분)", key="cap_new_code", placeholder="예: HCS8800")
-            with nc3:
-                _new_max = st.number_input("최대", min_value=1, max_value=99, value=1, key="cap_new_max")
-            with nc4:
-                _new_label = st.text_input("설명 (선택)", key="cap_new_label", placeholder="예: 밴쿠버")
-            if st.button("➕ 추가", key="cap_add"):
-                if _new_code.strip():
-                    _ln_v = _line_opts[_sel_line]
-                    _entry = {"code": _new_code.strip(), "max": int(_new_max)}
-                    if _new_label.strip():
-                        _entry["label"] = _new_label.strip()
-                    caps.setdefault(_ln_v, [])
-                    caps[_ln_v] = [e for e in caps[_ln_v] if e["code"] != _new_code.strip()]
-                    caps[_ln_v].append(_entry)
-                    storage.save_line_caps(caps)
-                    st.success(f"추가됨: {_sel_line} ← {_new_code.strip()} 최대 {_new_max}개")
-                    st.rerun()
-                else:
-                    st.warning("품목코드를 입력하세요.")
-
     res = distribute_daily(df, rules, group_policy=policy, split_lock=split_lock,
                            manual=manual, source_workers=SOURCE_WORKERS,
-                           set_groups=set_groups, line_item_caps=caps)
+                           set_groups=set_groups)
     summary = res["summary"]
     combined = res["combined"]
     detail = res["detail"]
@@ -2478,7 +2414,6 @@ def main():
     policy = load_policy(storage.GROUP_POLICY_PATH)
     split_lock = load_split_lock(storage.SPLIT_LOCK_PATH)
     manual = load_manual(storage.MANUAL_PATH)
-    line_caps = storage.load_line_caps()
     # 품목마스터/ 폴더의 모든 엑셀/CSV를 자동 로드 (UI 관리 없음)
     master, master_files = load_master_from_folder(storage.MASTER_FOLDER)
     # 셋트구분 시트 — 폴더에서 직접 마감작업자별 파일을 검색.
@@ -2506,7 +2441,7 @@ def main():
         with t1:
             tab_cumulative()
         with t2:
-            tab_daily(rules, policy, split_lock, manual, set_groups, line_caps)
+            tab_daily(rules, policy, split_lock, manual, set_groups)
         with t3:
             tab_integrity(rules, policy, split_lock, set_groups)
         with t4:
@@ -2524,7 +2459,7 @@ def main():
         with t1:
             tab_cumulative()
         with t2:
-            tab_daily(rules, policy, split_lock, manual, set_groups, line_caps)
+            tab_daily(rules, policy, split_lock, manual, set_groups)
         with t3:
             tab_integrity(rules, policy, split_lock, set_groups)
 
