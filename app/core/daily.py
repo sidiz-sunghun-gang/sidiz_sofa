@@ -56,9 +56,12 @@ def distribute_daily(
     split_lock: SplitLock | None = None,
     manual: ManualAssignments | None = None,
     set_groups: SetGroups | None = None,
+    line_item_caps: Dict[int, list] | None = None,
 ) -> dict:
     target_lines = target_lines or DAILY_TARGET_LINES
     sets = set_groups or SetGroups()
+    _caps: Dict[int, list] = line_item_caps or {}
+    _cap_counts: Dict[int, Dict[str, int]] = {ln: {} for ln in target_lines}
     # 분배 풀:
     #   - source_workers가 지정되면 "line" 텍스트에 그 이름이 포함된 행만 풀에 포함
     #     (예: "(8라인) 크리수나" 행 ✓, "(9라인)반제품" 행 ✗)
@@ -310,6 +313,22 @@ def distribute_daily(
         allowed = g["allowed"]
         cand_str = ",".join(line_label(l) for l in allowed) if allowed else ""
 
+        # 라인별 품목 배정 횟수 cap 적용
+        group_codes = [str(target.loc[idx, "item_code"]) for idx in g["indices"]]
+
+        def _cap_ok(ln: int, _gc=group_codes) -> bool:
+            for entry in _caps.get(ln, []):
+                prefix = entry["code"]
+                mx = int(entry.get("max", 1))
+                n_match = sum(1 for c in _gc if c.startswith(prefix))
+                if n_match and _cap_counts[ln].get(prefix, 0) + n_match > mx:
+                    return False
+            return True
+
+        eff_allowed = [l for l in allowed if _cap_ok(l)]
+        if not eff_allowed:
+            eff_allowed = allowed  # cap 충족 라인 없으면 제한 무시 (미배정 방지)
+
         # 수동 배정 우선 — 그룹 안 행이 manual에 등록되어 있으면 그 라인으로
         manual_ln: int | None = None
         if man.by_code:
@@ -338,7 +357,7 @@ def distribute_daily(
         lock_pref = g.get("lock_pref")
         lock_total = sum(lock_pref.values()) if lock_pref else 0.0
 
-        for l in allowed:
+        for l in eff_allowed:
             hc = max(1, headcount.get(l, 1))
             # 1) 인당 수량 부하 (배정 후)
             s_qty = (load_qty[l] + g["total_qty"]) / hc / norm_qty
@@ -371,6 +390,11 @@ def distribute_daily(
         load_qty[best_line] += g["total_qty"]
         for d, q in g["date_qty"].items():
             load_date_qty[best_line][d] = load_date_qty[best_line].get(d, 0.0) + q
+        for entry in _caps.get(best_line, []):
+            prefix = entry["code"]
+            n_match = sum(1 for c in group_codes if c.startswith(prefix))
+            if n_match:
+                _cap_counts[best_line][prefix] = _cap_counts[best_line].get(prefix, 0) + n_match
         for idx in g["indices"]:
             assign_by_idx[idx] = line_label(best_line)
             cand_by_idx[idx] = cand_str
