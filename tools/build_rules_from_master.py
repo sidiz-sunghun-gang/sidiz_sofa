@@ -1,15 +1,15 @@
 """마스터 엑셀 → line_rules.json 자동 생성.
 
 처리 시트 2개:
-1) '품목군코드상세' — 소파류 작업자 O/X 매트릭스 (1~8라인 분배 대상)
-2) '특정라인 지정' — 반제품 라인(10) 전용 코드 (소파 외 부속)
+1) '품목군코드상세' — 소파류 작업자 O/X 매트릭스 (LINE_FINISHED 제외 라인 분배 대상)
+2) '특정라인 지정' — 크리수나(LINE_FINISHED) 전용 코드 (소파 외 부속)
 추가:
-- 품목명에 '쿠션·헤드레스트·커넥터·봉제' 포함 코드도 반제품 라인 전용으로 자동 등록.
+- 품목명에 '쿠션·헤드레스트·커넥터·봉제' 포함 코드도 크리수나 라인 전용으로 자동 등록.
 
 규칙:
 - 품목군코드상세: 작업자 컬럼이 'O'가 아닌 라인은 차단 패턴 등록 (prefix `^코드`).
-  반제품 라인은 무조건 차단 → 일반 분배 참여 안 함.
-- 특정라인 지정: 이 시트의 코드는 반제품 라인 전용 → 1~8라인 모두 차단.
+  크리수나(LINE_FINISHED) 라인은 무조건 차단 → 일반 분배 참여 안 함.
+- 특정라인 지정: 이 시트의 코드는 크리수나 라인 전용 → 그 외 모든 라인 차단.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
-from core.lines import LINE_WORKERS, WORKER_TO_LINE, LINE_FINISHED  # noqa: E402
+from core.lines import LINE_WORKERS, WORKER_TO_LINE, LINE_FINISHED, TARGET_LINES  # noqa: E402
 
 MASTER_FILE = ROOT / "품목마스터" / "마감작업자별 생산가능품목_코드목록_v2.xlsx"
 RULES_PATH = ROOT / "app" / "storage" / "config" / "line_rules.json"
@@ -94,8 +94,9 @@ def collect_cushion_rules(forbidden: dict[int, set[str]]) -> int:
                 continue
             if not _is_finished(name):
                 continue
-            for line_no in range(1, 9):
-                forbidden[line_no].add(f"^{code}")
+            for line_no in TARGET_LINES:
+                if line_no != LINE_9:
+                    forbidden[line_no].add(f"^{code}")
             nineline_codes.add(f"^{code}")
             count += 1
 
@@ -121,8 +122,9 @@ def collect_cushion_rules(forbidden: dict[int, set[str]]) -> int:
                         continue
                     if not _is_finished(name):
                         continue
-                    for line_no in range(1, 9):
-                        forbidden[line_no].add(f"^{code}")
+                    for line_no in LINE_WORKERS:
+                        if line_no != LINE_9:
+                            forbidden[line_no].add(f"^{code}")
                     nineline_codes.add(f"^{code}")
                     count += 1
 
@@ -154,14 +156,16 @@ def collect_special_line_rules(forbidden: dict[int, set[str]]) -> int:
         if not any(c.isalnum() for c in code):
             continue
 
-        # 1~8라인 차단 (9라인 외 모두 작업 불가)
-        for line_no in range(1, 9):
+        # LINE_FINISHED(크리수나) 외 모든 라인 차단 (분배 대상 1~9라인 기준)
+        for line_no in TARGET_LINES:
+            if line_no == LINE_9:
+                continue
             forbidden[line_no].add(f"^{code}")
-        # 9라인 차단 목록에서는 제거 (9라인만 가능하게)
+        # LINE_FINISHED 차단 목록에서는 제거 (크리수나 라인만 가능하게)
         nineline_codes.add(f"^{code}")
         count += 1
 
-    # 9라인 차단 목록 정리 — 특정라인 코드는 9라인에서 허용
+    # LINE_FINISHED 차단 목록 정리 — 특정라인 코드는 크리수나 라인에서 허용
     forbidden[LINE_9] -= nineline_codes
     return count
 

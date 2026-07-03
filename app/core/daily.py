@@ -37,7 +37,7 @@ LINE_HEADCOUNT = dict(_LINE_HC)
 # 이름 기준이라 ERP의 라인 번호 표기가 달라져도 안전하게 필터됨.
 SOURCE_WORKERS: List[str] = ["김민웅", "크리수나"]
 # (하위호환 — 외부에서 import해 쓰는 곳이 있어 유지)
-SOURCE_LINES = [1, 9]
+SOURCE_LINES = [1, 8]
 
 # 기본 가중치 — 수량 우선 + 락 부합도
 DEFAULT_WEIGHTS = {"qty": 0.4, "sec": 0.15, "date": 0.2, "lock": 0.25}
