@@ -345,9 +345,37 @@ def distribute_daily(
             continue
 
         if not allowed:
+            # 그룹 교집합이 공집합: 개별 허용 라인으로 각각 독립 배정(폴백).
+            # 이유: 같은 수주건명에 라인 제약이 다른 품목이 섞이면 교집합이 공집합이 되어
+            #       그룹 전체가 미지정되는 문제를 방지한다. 단, 마스터에 없는 코드는 미지정 유지.
             for idx in g["indices"]:
-                assign_by_idx[idx] = "미지정"
-                cand_by_idx[idx] = cand_str or "(마스터에 없음)"
+                ind_al = row_allowed_map.get(idx, [])
+                if not ind_al:
+                    assign_by_idx[idx] = "미지정"
+                    cand_by_idx[idx] = "(마스터에 없음)"
+                    continue
+                # 개별 LPT 점수로 최적 라인 선정
+                ind_best: int | None = None
+                ind_score_val: float | None = None
+                for l in ind_al:
+                    hc = max(1, headcount.get(l, 1))
+                    qty_v = float(target.loc[idx, "plan_qty"])
+                    sec_v = float(target.loc[idx, "plan_sec"])
+                    s_q = (load_qty[l] + qty_v) / hc / norm_qty
+                    s_s = (load_sec[l] + sec_v) / hc / norm_sec
+                    sc = wt["qty"] * s_q + wt["sec"] * s_s
+                    if ind_score_val is None or sc < ind_score_val or (
+                        sc == ind_score_val and (ind_best is None or l < ind_best)
+                    ):
+                        ind_best = l
+                        ind_score_val = sc
+                assign_by_idx[idx] = line_label(ind_best)
+                cand_by_idx[idx] = "(개별배정)" + ",".join(line_label(l) for l in ind_al)
+                load_sec[ind_best] += float(target.loc[idx, "plan_sec"])
+                load_qty[ind_best] += float(target.loc[idx, "plan_qty"])
+                ship_v = target.loc[idx, "ship_date"] if "ship_date" in target.columns else None
+                ship_key = ship_v if pd.notna(ship_v) else "미지정"
+                load_date_qty[ind_best][ship_key] = load_date_qty[ind_best].get(ship_key, 0.0) + float(target.loc[idx, "plan_qty"])
             continue
 
         best_line = None
