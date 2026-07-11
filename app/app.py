@@ -2426,16 +2426,28 @@ def _inject_idle_watcher() -> None:
                 doc.addEventListener(evt, onActivity, {{ passive: true }});
             }});
 
-            setInterval(function() {{
+            function tick() {{
                 const last = parseInt(getCookie(ACT_COOKIE) || "0", 10);
                 if (!last) return;
-                if (Date.now() - last > IDLE_MS) {{
+                const remainMs = IDLE_MS - (Date.now() - last);
+                if (remainMs <= 0) {{
                     clearCookie(ACT_COOKIE);
                     clearCookie(AUTH_COOKIE);
                     setCookie("{_IDLE_FLAG_COOKIE}", "1", 30);
                     window.parent.location.reload();
+                    return;
                 }}
-            }}, 15000);
+                const badge = doc.getElementById("sidiz-session-badge");
+                if (badge) {{
+                    const totalSec = Math.floor(remainMs / 1000);
+                    const mm = String(Math.floor(totalSec / 60)).padStart(2, "0");
+                    const ss = String(totalSec % 60).padStart(2, "0");
+                    const role = badge.getAttribute("data-role") || "";
+                    badge.textContent = "🟢 " + role + " · " + mm + ":" + ss + " 후 자동 로그아웃";
+                }}
+            }}
+            setInterval(tick, 1000);
+            tick();
         }})();
         </script>
         """,
@@ -2577,7 +2589,7 @@ def main():
     st.markdown(
         f"""
 <div class='brand-header'>
-    <div class='brand-session-badge'>🟢 {session_label} 접속 중 · 30분 미사용 시 자동 로그아웃</div>
+    <div id='sidiz-session-badge' class='brand-session-badge' data-role='{session_label}'>🟢 {session_label} · 30:00 후 자동 로그아웃</div>
     <div class='brand-title'>🛋️ 라인별 분배 계획
         <span class='brand-tag'>SIDIZ SOFA</span>
     </div>
