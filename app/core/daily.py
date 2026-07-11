@@ -20,6 +20,7 @@ import pandas as pd
 from .rules import LineRules
 from .policy import GroupPolicy
 from .split import SplitLock, distribute_rows_by_weight
+from .cap import LineCap, distribute_rows_capped
 from .lines import TARGET_LINES, LINE_HEADCOUNT as _LINE_HC, line_label, LINE_FINISHED
 from .manual import ManualAssignments
 from .sets import SetGroups
@@ -60,6 +61,7 @@ def distribute_daily(
     split_lock: SplitLock | None = None,
     manual: ManualAssignments | None = None,
     set_groups: SetGroups | None = None,
+    line_cap: LineCap | None = None,
 ) -> dict:
     target_lines = target_lines or DAILY_TARGET_LINES
     sets = set_groups or SetGroups()
@@ -183,17 +185,6 @@ def distribute_daily(
                 ship_key = ship_v if pd.notna(ship_v) else "미지정"
                 load_date_qty_pre[ln][ship_key] = load_date_qty_pre[ln].get(ship_key, 0.0) + qty_v
 
-    # 그룹키: order_name (빈 값/NaN은 행마다 단독 그룹)
-    # 분할 정책 키워드(재고/센터/AS 등) 포함 시에도 행마다 단독 그룹으로 풀어서 분산 허용.
-    # 락된 행도 단독 그룹 (이후 그룹 처리에서 자동 제외됨)
-    raw_keys = target.get("order_name", pd.Series([""] * len(target))).fillna("").astype(str).str.strip()
-    solo_marks = pd.Series(
-        [f"__solo_{i}__" for i in range(len(target))], index=target.index
-    )
-    is_empty = raw_keys == ""
-    is_splittable = raw_keys.apply(policy.should_split)
-    is_locked = target.index.isin(locked_assign.keys())
-
     # 행별 가능 라인 미리 계산 — 코드 매칭 + 품목명 키워드 보강.
     # 품목명에 '쿠션' 포함이면 마스터에 코드가 없어도 9라인 강제 (서비스투입/AS 미싱 등 신규/임시 코드 보호).
     names_col = (
@@ -216,6 +207,59 @@ def distribute_daily(
         c = str(target.loc[idx, "item_code"])
         n = names_col.loc[idx]
         row_allowed_map[idx] = _row_allowed(c, n)
+
+    # === 신규: 라인당 최대 1개 균등분산 규칙 (분할 락 다음, 그룹핑 이전) ===
+    # 등록된 품목코드/패턴은 수주건명이 같아도 그룹으로 묶지 않고 행 단위로 풀어서,
+    # 작업 가능한 라인마다 최대 1개씩 고르게 분산 배정한다. 이미 분할 락으로 배정된
+    # 행은 제외(락이 우선). 행 수가 라인 수보다 많으면 부하가 가장 적은 라인부터
+    # 순서대로 2번째, 3번째... 채운다 — 한 라인에 몰아주지 않기 위함.
+    cap = line_cap or LineCap()
+    if (cap.exact or cap.pattern) and not target.empty:
+        by_code: Dict[str, List[int]] = {}
+        for idx in target.index:
+            if idx in locked_assign:
+                continue  # 분할 락이 이미 배정 — 균등분산 대상 제외
+            code = str(target.loc[idx, "item_code"])
+            if cap.is_capped(code):
+                by_code.setdefault(code, []).append(idx)
+
+        # 큰 물량부터 처리 — 좋은(부하 낮은) 라인 자리를 먼저 확보
+        code_order = sorted(
+            by_code.items(),
+            key=lambda kv: (
+                -sum(float(target.loc[i, "plan_qty"]) for i in kv[1]),
+                -sum(float(target.loc[i, "plan_sec"]) for i in kv[1]),
+            ),
+        )
+        for code, row_idx in code_order:
+            allowed = sorted(row_allowed_map.get(row_idx[0], []))
+            if not allowed:
+                continue
+            row_sorted = sorted(row_idx, key=lambda i: -float(target.loc[i, "plan_sec"]))
+            load_lookup = {l: load_qty_pre[l] / max(1, headcount.get(l, 1)) for l in allowed}
+            line_per_row = distribute_rows_capped(len(row_sorted), allowed, load_lookup)
+            cand_text = "균등분산(" + ",".join(line_label(l) for l in allowed) + ")"
+            for idx, ln in zip(row_sorted, line_per_row):
+                locked_assign[idx] = ln
+                locked_cand_str[idx] = cand_text
+                sec_v = float(target.loc[idx, "plan_sec"])
+                qty_v = float(target.loc[idx, "plan_qty"])
+                load_sec_pre[ln] += sec_v
+                load_qty_pre[ln] += qty_v
+                ship_v = target.loc[idx, "ship_date"] if "ship_date" in target.columns else None
+                ship_key = ship_v if pd.notna(ship_v) else "미지정"
+                load_date_qty_pre[ln][ship_key] = load_date_qty_pre[ln].get(ship_key, 0.0) + qty_v
+
+    # 그룹키: order_name (빈 값/NaN은 행마다 단독 그룹)
+    # 분할 정책 키워드(재고/센터/AS 등) 포함 시에도 행마다 단독 그룹으로 풀어서 분산 허용.
+    # 락된 행(분할 락 + 균등분산 모두 포함)도 단독 그룹 (이후 그룹 처리에서 자동 제외됨)
+    raw_keys = target.get("order_name", pd.Series([""] * len(target))).fillna("").astype(str).str.strip()
+    solo_marks = pd.Series(
+        [f"__solo_{i}__" for i in range(len(target))], index=target.index
+    )
+    is_empty = raw_keys == ""
+    is_splittable = raw_keys.apply(policy.should_split)
+    is_locked = target.index.isin(locked_assign.keys())
 
     # 반제품 라인 전용 코드는 수주건명 그룹에서 자동 분리.
     # 이유: 쿠션·헤드레스트·커넥터·봉제는 단차 품질 이슈 없는 부속이라 한 라인 묶음 불필요.

@@ -37,6 +37,7 @@ from core.split import (  # noqa: E402
 )
 from core.manual import ManualAssignments, load_manual, save_manual  # noqa: E402
 from core.sets import SetGroups, load_set_groups  # noqa: E402
+from core.cap import LineCap, load_line_cap, save_line_cap  # noqa: E402
 from core.lines import LINE_WORKERS, line_label  # noqa: E402
 from core.master import (  # noqa: E402
     ItemMaster, load_master_from_folder,
@@ -1652,7 +1653,8 @@ def tab_cumulative():
 
 def tab_daily(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
               manual: ManualAssignments | None = None,
-              set_groups: SetGroups | None = None):
+              set_groups: SetGroups | None = None,
+              line_cap: LineCap | None = None):
     df = _load_df("daily")
     if df is None:
         st.info("좌측에서 **당일분배 파일**을 업로드하세요.")
@@ -1711,7 +1713,7 @@ def tab_daily(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
 
     res = distribute_daily(df, rules, group_policy=policy, split_lock=split_lock,
                            manual=manual, source_workers=SOURCE_WORKERS,
-                           set_groups=set_groups)
+                           set_groups=set_groups, line_cap=line_cap)
     summary = res["summary"]
     combined = res["combined"]
     detail = res["detail"]
@@ -2055,8 +2057,66 @@ def tab_policy(policy: GroupPolicy):
     st.dataframe(summary, use_container_width=True, hide_index=True)
 
 
+def tab_line_cap(cap: LineCap):
+    st.caption(
+        "등록된 품목코드/패턴은 같은 수주건명이어도 그룹으로 묶지 않고, "
+        "**작업 가능한 라인마다 최대 1개씩** 고르게 분산 배정합니다.\n"
+        "작업 가능한 라인 수보다 물량이 많으면, 부하가 가장 적은 라인부터 순서대로 2개씩 채웁니다."
+    )
+
+    exact_current = "\n".join(cap.exact)
+    pattern_current = "\n".join(cap.pattern)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        exact_text = st.text_area(
+            "정확 일치 품목코드 (한 줄에 하나)",
+            value=exact_current, height=160, key="cap_exact",
+        )
+    with c2:
+        pattern_text = st.text_area(
+            "정규식 패턴 (한 줄에 하나) — 예: ^ACSF, .*HN$",
+            value=pattern_current, height=160, key="cap_pattern",
+            help="수주건명 그룹 정책과 달리, 여기 등록된 코드는 코드/패턴 매칭 기준입니다.",
+        )
+
+    if st.button("💾 저장", type="primary", key="cap_save"):
+        new_cap = LineCap(
+            exact=[s.strip() for s in exact_text.splitlines() if s.strip()],
+            pattern=[s.strip() for s in pattern_text.splitlines() if s.strip()],
+        )
+        save_line_cap(storage.LINE_CAP_PATH, new_cap)
+        st.success("저장되었습니다.")
+        st.rerun()
+
+    st.divider()
+    st.markdown("#### 현재 적용 결과 미리보기")
+    df = _load_df("daily")
+    if df is None:
+        st.info("당일분배 파일이 없습니다.")
+        return
+    if not cap.exact and not cap.pattern:
+        st.info("등록된 품목이 없습니다.")
+        return
+    target = df[df["line_no"].isin(DAILY_TARGET_LINES)].copy()
+    codes = target["item_code"].astype(str).fillna("") if "item_code" in target.columns else pd.Series(dtype=str)
+    mask = codes.map(cap.is_capped)
+    matched = target[mask]
+    if matched.empty:
+        st.info("현재 당일분배 데이터에 균등분산 대상 품목이 없습니다.")
+        return
+    summary = (
+        matched.groupby("item_code", dropna=False)
+        .agg(건수=("item_code", "size"), 총수량=("plan_qty", "sum"))
+        .reset_index()
+        .sort_values("건수", ascending=False)
+    )
+    st.dataframe(summary, use_container_width=True, hide_index=True)
+
+
 def tab_integrity(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
-                  set_groups: SetGroups | None = None):
+                  set_groups: SetGroups | None = None,
+                  line_cap: LineCap | None = None):
     st.caption(
         "누적분배 + 당일분배 데이터를 결합하여 라인별 수량/시간이 타당한지 검증합니다.\n"
         "한쪽 파일만 있어도 그 데이터 기준으로 표시되며, 일관성 검증은 두 파일이 모두 있을 때만 활성화됩니다."
@@ -2075,7 +2135,8 @@ def tab_integrity(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
     cu_res = process_cumulative(cu_df) if cu_df is not None else {"detail": pd.DataFrame()}
     da_res = (
         distribute_daily(da_df, rules, group_policy=policy, split_lock=split_lock,
-                         source_workers=SOURCE_WORKERS, set_groups=set_groups)
+                         source_workers=SOURCE_WORKERS, set_groups=set_groups,
+                         line_cap=line_cap)
         if da_df is not None else {"detail": pd.DataFrame()}
     )
 
@@ -2605,6 +2666,7 @@ def main():
     policy = load_policy(storage.GROUP_POLICY_PATH)
     split_lock = load_split_lock(storage.SPLIT_LOCK_PATH)
     manual = load_manual(storage.MANUAL_PATH)
+    line_cap = load_line_cap(storage.LINE_CAP_PATH)
     # 품목마스터/ 폴더의 모든 엑셀/CSV를 자동 로드 (UI 관리 없음)
     master, master_files = load_master_from_folder(storage.MASTER_FOLDER)
     # 셋트구분 시트 — 폴더에서 직접 마감작업자별 파일을 검색.
@@ -2622,23 +2684,26 @@ def main():
                 break
 
     if is_admin():
-        t1, t2, t3, t4, t5 = st.tabs([
+        t1, t2, t3, t4, t5, t6 = st.tabs([
             "📊 누적분배",
             "🚚 당일분배 (자동 분배)",
             "🔗 정합성 검증",
             "⚙️ 라인 규칙 관리",
             "🧩 수주건명 그룹 정책",
+            "⚖️ 라인당 개수 제한",
         ])
         with t1:
             tab_cumulative()
         with t2:
-            tab_daily(rules, policy, split_lock, manual, set_groups)
+            tab_daily(rules, policy, split_lock, manual, set_groups, line_cap)
         with t3:
-            tab_integrity(rules, policy, split_lock, set_groups)
+            tab_integrity(rules, policy, split_lock, set_groups, line_cap)
         with t4:
             tab_rules(rules, master)
         with t5:
             tab_policy(policy)
+        with t6:
+            tab_line_cap(line_cap)
     else:
         # 뷰어 — 조회 전용 탭만
         st.info("👀 **뷰어 모드** — 조회/다운로드만 가능합니다. 편집·업로드는 관리자 로그인이 필요합니다.")
@@ -2650,9 +2715,9 @@ def main():
         with t1:
             tab_cumulative()
         with t2:
-            tab_daily(rules, policy, split_lock, manual, set_groups)
+            tab_daily(rules, policy, split_lock, manual, set_groups, line_cap)
         with t3:
-            tab_integrity(rules, policy, split_lock, set_groups)
+            tab_integrity(rules, policy, split_lock, set_groups, line_cap)
 
 
 if __name__ == "__main__":
