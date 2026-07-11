@@ -46,7 +46,7 @@ def build_integrity(
 
     if not da.empty and "배정라인" in da.columns:
         da["line_no"] = da["배정라인"].apply(_line_no_from_label)
-        da["line_key"] = da["배정라인"].astype(str)
+        da["line_key"] = da["line_no"].apply(lambda x: f"{int(x)}라인" if pd.notna(x) else None)
     else:
         da["line_no"] = pd.Series(dtype="Int64")
         da["line_key"] = pd.Series(dtype="object")
