@@ -1452,16 +1452,18 @@ def sidebar_uploads():
         st.sidebar.markdown("<div class='sb-section-title'>📤 데이터 업로드</div>", unsafe_allow_html=True)
         st.sidebar.caption("최신 파일 1개만 유지됩니다.")
 
+        cu_gen = st.session_state.get("_uploader_gen_cumulative", 0)
         cu = st.sidebar.file_uploader(
             "누적분배",
-            type=["xls", "xlsx"], key="up_cu",
+            type=["xls", "xlsx"], key=f"up_cu_{cu_gen}",
             help="grd_list_*.xls (누적 생산 데이터)",
         )
         _handle_upload("cumulative", cu, "누적분배")
 
+        da_gen = st.session_state.get("_uploader_gen_daily", 0)
         da = st.sidebar.file_uploader(
             "당일분배",
-            type=["xls", "xlsx"], key="up_da",
+            type=["xls", "xlsx"], key=f"up_da_{da_gen}",
             help="grd_list_*.xls (당일 생산 데이터)",
         )
         _handle_upload("daily", da, "당일분배")
@@ -1496,6 +1498,8 @@ def sidebar_uploads():
                                  use_container_width=True):
                         storage.delete_upload(kind)  # type: ignore[arg-type]
                         st.session_state.pop(f"_saved_id_{kind}", None)
+                        gen_key = f"_uploader_gen_{kind}"
+                        st.session_state[gen_key] = st.session_state.get(gen_key, 0) + 1
                         st.rerun()
             else:
                 # 뷰어 — 삭제 버튼 없이 카드만
