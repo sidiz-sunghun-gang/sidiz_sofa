@@ -5,16 +5,21 @@
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
+import itsdangerous
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
+import streamlit.components.v1 as components
+from streamlit_cookies_controller import CookieController
 
 # Streamlit이 'app/app.py'를 실행하면 app/ 가 sys.path[0]에 추가되므로
 # core 패키지는 직접 import 가능. 'app.' 접두사는 스크립트명과 충돌해서 사용하지 않는다.
@@ -283,6 +288,7 @@ div[data-testid="stDialog"] [data-testid="stDataFrame"] [role="gridcell"][aria-c
 
 /* ========== 브랜드 헤더 ========== */
 .brand-header {
+    position: relative;
     background: linear-gradient(135deg, #ffffff 0%, #faf7f2 100%);
     border: 1px solid #e8dcc8;
     border-left: 6px solid #c8945a;
@@ -290,6 +296,20 @@ div[data-testid="stDialog"] [data-testid="stDataFrame"] [role="gridcell"][aria-c
     padding: 20px 28px;
     margin-bottom: 20px;
     box-shadow: 0 2px 8px rgba(74, 52, 36, 0.06);
+}
+.brand-session-badge {
+    position: absolute;
+    top: 18px;
+    right: 24px;
+    background: #eef3ee;
+    color: #3f6b4f;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 5px 12px;
+    border-radius: 12px;
+    border: 1px solid #cfe3d5;
+    letter-spacing: 0.2px;
+    white-space: nowrap;
 }
 .brand-header .brand-title {
     font-size: 28px;
@@ -1534,9 +1554,7 @@ def sidebar_uploads():
     st.sidebar.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
     if st.sidebar.button("🚪 로그아웃 / 모드 변경", use_container_width=True,
                          key="btn_logout"):
-        st.session_state.pop("_authed", None)
-        st.session_state.pop("_role", None)
-        st.session_state.pop("_show_admin_form", None)
+        _clear_session()
         st.rerun()
 
 
@@ -2273,6 +2291,12 @@ def tab_integrity(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
         )
 
 
+IDLE_TIMEOUT_SECONDS = 30 * 60  # 30분 무활동 시 자동 로그아웃
+_AUTH_COOKIE = "sidiz_auth"
+_ACTIVITY_COOKIE = "sidiz_last_active"
+_IDLE_FLAG_COOKIE = "sidiz_idle_flag"
+
+
 def _get_app_password() -> str:
     """비밀번호 조회 — secrets.toml 우선, 없으면 환경변수, 그래도 없으면 빈 문자열."""
     try:
@@ -2284,17 +2308,160 @@ def _get_app_password() -> str:
     return os.environ.get("APP_PASSWORD", "")
 
 
-def _check_password() -> bool:
-    """진입 게이트. 관리자(비번 필요) / 뷰어(비번 없음) 두 모드 지원."""
-    if st.session_state.get("_authed"):
-        return True
+def _cookie_secret() -> str:
+    """쿠키 서명용 비밀키. 비밀번호가 바뀌면 기존 쿠키도 자동 무효화된다."""
+    base = _get_app_password() or "sidiz-dev-secret"
+    return hashlib.sha256(base.encode("utf-8")).hexdigest()
 
+
+def _make_auth_token(role: str) -> str:
+    signer = itsdangerous.Signer(_cookie_secret())
+    return signer.sign(role.encode("utf-8")).decode("utf-8")
+
+
+def _verify_auth_token(token: str) -> str | None:
+    signer = itsdangerous.Signer(_cookie_secret())
+    try:
+        return signer.unsign(token).decode("utf-8")
+    except itsdangerous.BadSignature:
+        return None
+
+
+def _restore_session_from_cookie() -> None:
+    """새로고침 등으로 세션이 끊겼을 때 브라우저 쿠키로 로그인 상태를 복원."""
+    cookies = CookieController()
+    token = cookies.get(_AUTH_COOKIE)
+    if not token:
+        return
+    role = _verify_auth_token(token)
+    if role not in ("admin", "viewer"):
+        return
+    st.session_state["_authed"] = True
+    st.session_state["_role"] = role
+
+
+def _is_idle_timeout() -> bool:
+    cookies = CookieController()
+    last_active = cookies.get(_ACTIVITY_COOKIE)
+    if not last_active:
+        return False  # 활동 기록이 아직 없음 (로그인 직후)
+    try:
+        last_ms = float(last_active)
+    except (TypeError, ValueError):
+        return False
+    idle_sec = (time.time() * 1000 - last_ms) / 1000
+    return idle_sec > IDLE_TIMEOUT_SECONDS
+
+
+def _touch_activity_cookie() -> None:
+    cookies = CookieController()
+    cookies.set(_ACTIVITY_COOKIE, str(int(time.time() * 1000)),
+                max_age=IDLE_TIMEOUT_SECONDS * 2)
+
+
+def _start_session(role: str) -> None:
+    st.session_state["_authed"] = True
+    st.session_state["_role"] = role
+    st.session_state.pop("_show_admin_form", None)
+    cookies = CookieController()
+    cookies.set(_AUTH_COOKIE, _make_auth_token(role), max_age=60 * 60 * 12)
+    cookies.set(_ACTIVITY_COOKIE, str(int(time.time() * 1000)),
+                max_age=IDLE_TIMEOUT_SECONDS * 2)
+    # 쿠키 컴포넌트는 브라우저 왕복을 거쳐 실제로 반영된다 — 호출 직후 st.rerun()이
+    # 그 왕복을 끊어버리는 경합을 막기 위해 짧게 대기한다.
+    time.sleep(1.0)
+
+
+def _clear_session(*, idle: bool = False) -> None:
+    st.session_state.pop("_authed", None)
+    st.session_state.pop("_role", None)
+    st.session_state.pop("_show_admin_form", None)
+    cookies = CookieController()
+    cookies.remove(_AUTH_COOKIE)
+    cookies.remove(_ACTIVITY_COOKIE)
+    if idle:
+        st.session_state["_idle_logged_out"] = True
+    else:
+        time.sleep(1.0)
+
+
+def _inject_idle_watcher() -> None:
+    """마우스/키보드 활동을 감지해 활동 쿠키를 갱신하고,
+    30분 이상 무활동 시 쿠키를 지우고 자동으로 새로고침(로그아웃)한다."""
+    components.html(
+        f"""
+        <script>
+        (function() {{
+            // 이 플래그는 (parent가 아닌) 이 iframe 자신의 window에 둔다 —
+            // 로그인/로그아웃으로 컴포넌트가 재마운트될 때 자연스럽게 초기화되어야
+            // 새 iframe에서 감시가 다시 붙는다. parent에 두면 iframe이 사라져도
+            // 플래그가 남아 재로그인 후 감시가 영영 붙지 않는 문제가 생긴다.
+            if (window.__sidizIdleWatcherAttached) return;
+            window.__sidizIdleWatcherAttached = true;
+
+            const IDLE_MS = {IDLE_TIMEOUT_SECONDS * 1000};
+            const ACT_COOKIE = "{_ACTIVITY_COOKIE}";
+            const AUTH_COOKIE = "{_AUTH_COOKIE}";
+            const doc = window.parent.document;
+
+            function getCookie(name) {{
+                const m = doc.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+                return m ? decodeURIComponent(m[1]) : null;
+            }}
+            function setCookie(name, value, maxAgeSec) {{
+                doc.cookie = name + "=" + value + "; path=/; max-age=" + maxAgeSec;
+            }}
+            function clearCookie(name) {{
+                doc.cookie = name + "=; path=/; max-age=0";
+            }}
+
+            let lastWrite = 0;
+            function onActivity() {{
+                const now = Date.now();
+                if (now - lastWrite < 3000) return;  // 3초 스로틀
+                lastWrite = now;
+                setCookie(ACT_COOKIE, now, 86400);
+            }}
+            ["mousemove", "keydown", "click", "scroll", "touchstart"].forEach(function(evt) {{
+                doc.addEventListener(evt, onActivity, {{ passive: true }});
+            }});
+
+            setInterval(function() {{
+                const last = parseInt(getCookie(ACT_COOKIE) || "0", 10);
+                if (!last) return;
+                if (Date.now() - last > IDLE_MS) {{
+                    clearCookie(ACT_COOKIE);
+                    clearCookie(AUTH_COOKIE);
+                    setCookie("{_IDLE_FLAG_COOKIE}", "1", 30);
+                    window.parent.location.reload();
+                }}
+            }}, 15000);
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def _check_password() -> bool:
+    """진입 게이트. 관리자(비번 필요) / 뷰어(비번 없음) 두 모드 지원.
+    브라우저 쿠키로 새로고침에도 로그인 상태를 유지하고, 30분 무활동 시 자동 로그아웃한다."""
     expected = _get_app_password()
     # 비밀번호 미설정 — 자동 관리자 통과 (로컬 개발 환경)
     if not expected:
         st.session_state["_authed"] = True
         st.session_state["_role"] = "admin"
         return True
+
+    if not st.session_state.get("_authed"):
+        _restore_session_from_cookie()
+
+    if st.session_state.get("_authed"):
+        if _is_idle_timeout():
+            _clear_session(idle=True)
+        else:
+            _touch_activity_cookie()
+            return True
 
     # 로그인 화면 CSS
     st.markdown(
@@ -2341,6 +2508,14 @@ def _check_password() -> bool:
         unsafe_allow_html=True,
     )
 
+    idle_logged_out = st.session_state.pop("_idle_logged_out", False)
+    idle_cookies = CookieController()
+    if idle_cookies.get(_IDLE_FLAG_COOKIE):
+        idle_logged_out = True
+        idle_cookies.remove(_IDLE_FLAG_COOKIE)
+    if idle_logged_out:
+        st.info("⏱️ 30분 이상 사용이 없어 자동 로그아웃되었습니다. 다시 로그인해주세요.")
+
     c1, c2, c3 = st.columns([1, 1.6, 1])
     with c2:
         show_admin_form = st.session_state.get("_show_admin_form", False)
@@ -2355,8 +2530,7 @@ def _check_password() -> bool:
             with bv:
                 if st.button("👀 뷰어로 입장", use_container_width=True,
                              help="조회 전용 (편집·업로드 불가)"):
-                    st.session_state["_authed"] = True
-                    st.session_state["_role"] = "viewer"
+                    _start_session("viewer")
                     st.rerun()
             st.caption(
                 "🔐 **관리자**: 비밀번호 필요 · 모든 기능 사용 가능  \n"
@@ -2375,9 +2549,7 @@ def _check_password() -> bool:
                     canceled = st.form_submit_button("← 뒤로", use_container_width=True)
                 if submitted:
                     if pw == expected:
-                        st.session_state["_authed"] = True
-                        st.session_state["_role"] = "admin"
-                        st.session_state.pop("_show_admin_form", None)
+                        _start_session("admin")
                         st.rerun()
                     else:
                         st.error("비밀번호가 올바르지 않습니다.")
@@ -2399,10 +2571,13 @@ def main():
     # 비밀번호 게이트
     if not _check_password():
         st.stop()
+    _inject_idle_watcher()
 
+    session_label = "관리자" if is_admin() else "뷰어"
     st.markdown(
-        """
+        f"""
 <div class='brand-header'>
+    <div class='brand-session-badge'>🟢 {session_label} 접속 중 · 30분 미사용 시 자동 로그아웃</div>
     <div class='brand-title'>🛋️ 라인별 분배 계획
         <span class='brand-tag'>SIDIZ SOFA</span>
     </div>
