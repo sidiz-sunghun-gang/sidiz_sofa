@@ -35,7 +35,16 @@ def process_cumulative(
         lambda x: line_label(int(x)) if pd.notna(x) else None
     )
 
-    # 3) 표시용 슬림 데이터 — 수주건명 바로 오른쪽에 품목명칭 배치
+    return build_cumulative_result(work)
+
+
+def build_cumulative_result(work: pd.DataFrame) -> dict:
+    """필터링·라인 라벨링이 끝난 `work` → detail/combined/raw_filtered 재구성.
+
+    "line" 컬럼 값을 부분적으로 수정한 뒤(예: 라인 OUT 재배정) 다시 호출해도
+    항상 최신 상태와 일치한다.
+    """
+    # 표시용 슬림 데이터 — 수주건명 바로 오른쪽에 품목명칭 배치
     display_cols = [
         "item_code", "color", "plan_sec", "plan_qty",
         "order_name", "item_name", "ship_date", "line",
@@ -47,7 +56,7 @@ def process_cumulative(
         "ship_date": "출고일자", "line": "라인",
     })
 
-    # 4) 라인(원본 라벨) × 출고일자 — 수량/시간 합쳐진 표
+    # 라인(원본 라벨) × 출고일자 — 수량/시간 합쳐진 표
     combined = _build_combined_pivot(work)
 
     return {

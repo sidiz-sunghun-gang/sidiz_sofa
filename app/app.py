@@ -27,7 +27,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from core.loader import read_grd_excel  # noqa: E402
-from core.cumulative import process_cumulative  # noqa: E402
+from core.cumulative import process_cumulative, CUMUL_DISPLAY_LINES  # noqa: E402
 from core.daily import distribute_daily, DAILY_TARGET_LINES, LINE_HEADCOUNT, SOURCE_WORKERS  # noqa: E402
 from core.rules import LineRules, load_rules, save_rules, rules_from_dataframe  # noqa: E402
 from core.policy import GroupPolicy, load_policy, save_policy, DEFAULT_SPLIT_KEYWORDS  # noqa: E402
@@ -35,7 +35,7 @@ from core.split import SplitLock, load_split_lock  # noqa: E402
 from core.manual import ManualAssignments, load_manual, save_manual  # noqa: E402
 from core.sets import SetGroups, load_set_groups  # noqa: E402
 from core.cap import LineCap, load_line_cap, save_line_cap  # noqa: E402
-from core.lineout import redistribute_out_lines  # noqa: E402
+from core.lineout import redistribute_out_lines, redistribute_out_lines_cumulative  # noqa: E402
 from core.lines import LINE_WORKERS, line_label  # noqa: E402
 from core.master import ItemMaster, load_master_from_folder  # noqa: E402
 from core.integrity import build_integrity  # noqa: E402
@@ -1560,13 +1560,41 @@ def sidebar_uploads():
         st.rerun()
 
 
-def tab_cumulative():
+def tab_cumulative(rules: LineRules):
     df = _load_df("cumulative")
     if df is None:
         st.info("좌측에서 **누적분배 파일**을 업로드하세요.")
         return
 
     res = process_cumulative(df)
+
+    # --- 라인 OUT(연차·반차) 처리 — 아직 미착수된 누적 잔여 물량만 재배정 ---
+    st.markdown("#### 🚨 라인 OUT 처리 (연차·반차)")
+    out_sel = st.multiselect(
+        "OUT 처리할 라인 선택",
+        options=[line_label(l) for l in CUMUL_DISPLAY_LINES],
+        key="cumulative_out_lines",
+        help="선택한 라인의 미착수 누적 잔여 물량만 나머지 라인으로 재배정합니다. "
+             "다른 라인에 이미 배정된 물량은 변경되지 않습니다.",
+    )
+    if out_sel:
+        out_nos = [ln for ln in CUMUL_DISPLAY_LINES if line_label(ln) in out_sel]
+        res = redistribute_out_lines_cumulative(
+            res["raw_filtered"], rules, out_nos, CUMUL_DISPLAY_LINES, headcount=LINE_HEADCOUNT,
+        )
+        if res["moved"]:
+            st.success(
+                f"✅ {', '.join(out_sel)} 잔여 물량 {res['moved']}건을 나머지 라인으로 재배정했습니다."
+            )
+        if not res["unmovable"].empty:
+            st.warning(
+                f"⚠️ 재배정 불가 품목 {len(res['unmovable'])}건 — 선택한 라인 전용 품목이라 "
+                "다른 라인에서는 작업할 수 없어 원래 라인에 그대로 남겨두었습니다. 수동으로 확인해주세요."
+            )
+            um_cols = [c for c in ["item_code", "item_name", "order_name", "plan_qty", "line"]
+                       if c in res["unmovable"].columns]
+            st.dataframe(res["unmovable"][um_cols], use_container_width=True, hide_index=True)
+
     combined = res["combined"]
     detail = res["detail"]
 
@@ -2740,7 +2768,7 @@ def main():
             "⚖️ 라인당 개수 제한",
         ])
         with t1:
-            tab_cumulative()
+            tab_cumulative(rules)
         with t2:
             tab_daily(rules, policy, split_lock, manual, set_groups, line_cap)
         with t3:
@@ -2760,7 +2788,7 @@ def main():
             "🔗 정합성 검증",
         ])
         with t1:
-            tab_cumulative()
+            tab_cumulative(rules)
         with t2:
             tab_daily(rules, policy, split_lock, manual, set_groups, line_cap)
         with t3:
