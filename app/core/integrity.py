@@ -113,7 +113,6 @@ def build_integrity(
         for name, row in both.iterrows():
             cset = set(row["누적_라인"] or [])
             dset = set(row["당일_라인"] or [])
-            ok = (cset & dset) and not (cset - dset) and not (dset - cset)
             consistency_rows.append({
                 "수주건명": str(name) if pd.notna(name) else "(미지정)",
                 "누적_라인": ", ".join(row["누적_라인"] or []),

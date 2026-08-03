@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import os
 import sys
@@ -29,23 +28,22 @@ if str(BASE_DIR) not in sys.path:
 
 from core.loader import read_grd_excel  # noqa: E402
 from core.cumulative import process_cumulative  # noqa: E402
-from core.daily import distribute_daily, DAILY_TARGET_LINES, LINE_HEADCOUNT, SOURCE_LINES, SOURCE_WORKERS  # noqa: E402
+from core.daily import distribute_daily, DAILY_TARGET_LINES, LINE_HEADCOUNT, SOURCE_WORKERS  # noqa: E402
 from core.rules import LineRules, load_rules, save_rules, rules_from_dataframe  # noqa: E402
 from core.policy import GroupPolicy, load_policy, save_policy, DEFAULT_SPLIT_KEYWORDS  # noqa: E402
-from core.split import (  # noqa: E402
-    SplitLock, load_split_lock, save_split_lock, split_lock_from_dataframe,
-)
+from core.split import SplitLock, load_split_lock  # noqa: E402
 from core.manual import ManualAssignments, load_manual, save_manual  # noqa: E402
 from core.sets import SetGroups, load_set_groups  # noqa: E402
 from core.cap import LineCap, load_line_cap, save_line_cap  # noqa: E402
+from core.lineout import redistribute_out_lines  # noqa: E402
 from core.lines import LINE_WORKERS, line_label  # noqa: E402
-from core.master import (  # noqa: E402
-    ItemMaster, load_master_from_folder,
-    pattern_common_name, exact_short_name,
-)
+from core.master import ItemMaster, load_master_from_folder  # noqa: E402
 from core.integrity import build_integrity  # noqa: E402
 from core import storage  # noqa: E402
 
+
+# 사용 매뉴얼 (Artifact) — 로그인 화면에 링크 노출
+MANUAL_URL = "https://claude.ai/code/artifact/0179bc5f-5cac-488c-9012-d9a0a1f6ae2f"
 
 st.set_page_config(
     page_title="라인별 분배 계획 · 소파 생산",
@@ -755,6 +753,8 @@ def _combo_line_totals(
         return None
     COLOR_QTY = "#e76f51"
 
+    min_by_line = [round(v / 60) for v in sec_by_line]
+
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     # 시간 막대
     fig.add_trace(go.Bar(
@@ -763,10 +763,11 @@ def _combo_line_totals(
         marker_color=bar_color,
         marker_line_color="rgba(255,255,255,0.9)",
         marker_line_width=1.0,
-        text=[f"{v:,}" if v > 0 else "" for v in sec_by_line],
+        text=[f"{v:,}\n({m:,}분)" if v > 0 else "" for v, m in zip(sec_by_line, min_by_line)],
         textposition="inside", insidetextanchor="middle",
         textfont=dict(color="#ffffff", size=10),
-        hovertemplate="<b>%{x}</b><br>시간 %{y:,}초<extra></extra>",
+        customdata=min_by_line,
+        hovertemplate="<b>%{x}</b><br>시간 %{y:,}초 (약 %{customdata:,}분)<extra></extra>",
     ), secondary_y=False)
 
     # 수량 선
@@ -784,9 +785,9 @@ def _combo_line_totals(
     ), secondary_y=True)
 
     annotations = [
-        dict(x=l, y=s, text=f"<b>{s:,}</b>", showarrow=False,
-             yshift=14, font=dict(size=12, color="#334155"), yref="y")
-        for l, s in zip(lines, sec_by_line)
+        dict(x=l, y=s, text=f"<b>{s:,}초</b><br>({m:,}분)", showarrow=False,
+             yshift=22, font=dict(size=11, color="#334155"), yref="y")
+        for l, s, m in zip(lines, sec_by_line, min_by_line)
     ]
 
     fig.update_layout(
@@ -811,7 +812,7 @@ def _combo_line_totals(
         title_text="시간(초)",
         title_font=dict(color="#94a3b8", size=11),
         tickfont=dict(color="#94a3b8", size=10),
-        range=[0, max(sec_by_line + [1]) * 1.22],
+        range=[0, max(sec_by_line + [1]) * 1.3],
         showgrid=True, gridcolor="#f1f5f9", zeroline=False,
         secondary_y=False,
     )
@@ -1676,8 +1677,8 @@ def tab_daily(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
     set_icon = "✅" if set_n > 0 else "⚠️"
     st.caption(f"{set_icon} 셋트구분 매핑: **{set_n}쌍** 로드됨 (같은 셋트의 행은 한 라인에 묶임).")
 
-    # 0쌍이면 원인 진단을 화면에 표시 — 어디서 실패하는지 짚어줌
-    if set_n == 0:
+    # 0쌍이면 원인 진단을 화면에 표시 — 어디서 실패하는지 짚어줌 (내부 경로 노출이라 관리자만)
+    if set_n == 0 and is_admin():
         with st.expander("🔧 셋트구분 0쌍 진단 — 어디서 실패하는지", expanded=True):
             folder = storage.MASTER_FOLDER
             st.write(f"**MASTER_FOLDER 경로**: `{folder}`")
@@ -1714,6 +1715,34 @@ def tab_daily(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
     res = distribute_daily(df, rules, group_policy=policy, split_lock=split_lock,
                            manual=manual, source_workers=SOURCE_WORKERS,
                            set_groups=set_groups, line_cap=line_cap)
+
+    # --- 라인 OUT(연차·반차) 처리 — 해당 라인 배정 품목만 나머지 라인으로 재배정 ---
+    st.markdown("#### 🚨 라인 OUT 처리 (연차·반차)")
+    out_sel = st.multiselect(
+        "OUT 처리할 라인 선택",
+        options=[line_label(l) for l in DAILY_TARGET_LINES],
+        key="daily_out_lines",
+        help="선택한 라인에 이미 배정된 품목만 나머지 라인으로 재배정합니다. "
+             "다른 라인에 이미 배정된 품목은 변경되지 않습니다.",
+    )
+    if out_sel:
+        out_nos = [ln for ln in DAILY_TARGET_LINES if line_label(ln) in out_sel]
+        res = redistribute_out_lines(
+            res["assigned_df"], rules, out_nos, DAILY_TARGET_LINES, headcount=LINE_HEADCOUNT,
+        )
+        if res["moved"]:
+            st.success(
+                f"✅ {', '.join(out_sel)} 배정 품목 {res['moved']}건을 나머지 라인으로 재배정했습니다."
+            )
+        if not res["unmovable"].empty:
+            st.warning(
+                f"⚠️ 재배정 불가 품목 {len(res['unmovable'])}건 — 선택한 라인 전용 품목이라 "
+                "다른 라인에서는 작업할 수 없어 원래 라인에 그대로 남겨두었습니다. 수동으로 확인해주세요."
+            )
+            um_cols = [c for c in ["item_code", "item_name", "order_name", "plan_qty", "배정라인"]
+                       if c in res["unmovable"].columns]
+            st.dataframe(res["unmovable"][um_cols], use_container_width=True, hide_index=True)
+
     summary = res["summary"]
     combined = res["combined"]
     detail = res["detail"]
@@ -2304,7 +2333,6 @@ def tab_integrity(rules: LineRules, policy: GroupPolicy, split_lock: SplitLock,
             return (int(m.group(1)) if m else 99, str(s))
         ordered_lines = sorted(matrix_qty.index, key=_key)
 
-        date_cols = [c for c in matrix_qty.columns if c != "합계"]
         rows = []
         for ln in ordered_lines:
             row_q = {"라인": ln, "구분": "수량"}
@@ -2538,9 +2566,10 @@ def _check_password() -> bool:
 
     # 로그인 화면 CSS
     st.markdown(
-        """
+        f"""
 <style>
-.login-wrap {
+.login-wrap {{
+    position: relative;
     max-width: 460px;
     margin: 60px auto 0 auto;
     background: #ffffff;
@@ -2550,29 +2579,47 @@ def _check_password() -> bool:
     padding: 28px 32px;
     box-shadow: 0 4px 18px rgba(74,52,36,0.08);
     text-align: center;
-}
-.login-wrap .lg-logo {
+}}
+.login-wrap .lg-logo {{
     font-size: 28px;
     font-weight: 800;
     color: #4a3424;
     letter-spacing: -0.4px;
     margin-bottom: 4px;
-}
-.login-wrap .lg-sub {
+}}
+.login-wrap .lg-sub {{
     font-size: 11px;
     color: #8b6f4e;
     letter-spacing: 3px;
     font-weight: 600;
     margin-bottom: 18px;
     text-transform: uppercase;
-}
-.login-wrap .lg-msg {
+}}
+.login-wrap .lg-msg {{
     font-size: 13px;
     color: #6b4a30;
     margin-bottom: 14px;
-}
+}}
+.login-wrap .lg-manual-link {{
+    position: absolute;
+    top: 18px;
+    right: 20px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #8b6f4e;
+    text-decoration: none;
+    border: 1px solid #e8dcc8;
+    border-radius: 999px;
+    padding: 4px 12px;
+    background: #faf6ee;
+}}
+.login-wrap .lg-manual-link:hover {{
+    color: #4a3424;
+    border-color: #c8945a;
+}}
 </style>
 <div class='login-wrap'>
+    <a class='lg-manual-link' href='{MANUAL_URL}' target='_blank' rel='noopener'>📖 사용 매뉴얼</a>
     <div class='lg-logo'>🛋️ SIDIZ SOFA</div>
     <div class='lg-sub'>PRODUCTION DISPATCH</div>
     <div class='lg-msg'>접속 방법을 선택하세요</div>

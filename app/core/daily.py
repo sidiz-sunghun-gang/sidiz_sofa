@@ -478,6 +478,15 @@ def distribute_daily(
     # 합치기 (원래 순서 보존)
     full = pd.concat([target_sorted, excluded], ignore_index=False).sort_index().reset_index(drop=True)
 
+    return build_daily_result(full, target_lines, headcount)
+
+
+def build_daily_result(full: pd.DataFrame, target_lines: List[int], headcount: Dict[int, int]) -> dict:
+    """배정 완료된 `full`(배정라인/후보라인 포함) → detail/summary/combined 재구성.
+
+    라인별 부하는 배정라인 기준으로 `full`에서 직접 합산하므로, `full`의 배정라인 값을
+    부분적으로 수정한 뒤(예: 라인 OUT 재배정) 다시 호출해도 항상 최신 상태와 일치한다.
+    """
     # 표시용 detail — 수주건명 바로 오른쪽에 품목명칭 배치
     show_cols = ["item_code", "color", "plan_sec", "plan_qty",
                  "order_name", "item_name", "ship_date", "line", "배정라인", "후보라인"]
@@ -488,19 +497,29 @@ def distribute_daily(
         "ship_date": "출고일자", "line": "원본라인",
     })
 
-    # 라인별 부하 요약 (대상 + 제외)
+    has_line_col = "배정라인" in full.columns
+    target_labels = {line_label(l): l for l in target_lines}
+
+    # 라인별 부하 요약 (대상 + 제외) — 배정라인 기준 합산이라 재배정 후에도 그대로 재사용 가능
     rows = []
     for l in target_lines:
         hc = headcount.get(l, 1)
+        sub = full[full["배정라인"] == line_label(l)] if has_line_col else full.iloc[0:0]
+        sec_v = float(sub["plan_sec"].sum()) if "plan_sec" in sub.columns else 0.0
+        qty_v = float(sub["plan_qty"].sum()) if "plan_qty" in sub.columns else 0.0
         rows.append({
             "라인": line_label(l), "구분": "분배", "인원": hc,
-            "총 계획시간(초)": int(load_sec[l]),
-            "총 계획량": int(load_qty[l]),
-            "인당 부하(초)": int(load_sec[l] / max(1, hc)),
+            "총 계획시간(초)": int(sec_v),
+            "총 계획량": int(qty_v),
+            "인당 부하(초)": int(sec_v / max(1, hc)),
         })
-    # 제외 라인별 합계
-    if not excluded.empty:
-        ex_grp = excluded.groupby("배정라인", dropna=False).agg(
+    # 제외 라인별 합계 (대상 라인·미지정이 아닌 나머지 배정라인 값)
+    if has_line_col:
+        excluded_part = full[~full["배정라인"].isin(set(target_labels.keys()) | {"미지정"})]
+    else:
+        excluded_part = full.iloc[0:0]
+    if not excluded_part.empty:
+        ex_grp = excluded_part.groupby("배정라인", dropna=False).agg(
             plan_sec=("plan_sec", "sum"), plan_qty=("plan_qty", "sum")
         )
         for ln, r in ex_grp.iterrows():
@@ -510,9 +529,9 @@ def distribute_daily(
                 "총 계획량": int(r["plan_qty"]),
                 "인당 부하(초)": "-",
             })
-    unassigned_n = int((target_sorted["배정라인"] == "미지정").sum()) if "배정라인" in target_sorted.columns else 0
+    unassigned_n = int((full["배정라인"] == "미지정").sum()) if has_line_col else 0
     if unassigned_n > 0:
-        un = target_sorted[target_sorted["배정라인"] == "미지정"]
+        un = full[full["배정라인"] == "미지정"]
         rows.append({
             "라인": "미배정", "구분": "오류", "인원": 0,
             "총 계획시간(초)": int(un["plan_sec"].sum()),

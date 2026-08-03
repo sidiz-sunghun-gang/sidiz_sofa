@@ -4,7 +4,6 @@
 """
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,22 +47,6 @@ class ItemMaster:
             if ks and vs and vs.lower() != "nan":
                 items[ks] = vs
         return cls(items=items)
-
-
-def load_item_master(path: Path) -> ItemMaster:
-    if not path.exists():
-        return ItemMaster()
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return ItemMaster.from_dict(json.load(f))
-    except Exception:
-        return ItemMaster()
-
-
-def save_item_master(path: Path, master: ItemMaster) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(master.to_dict(), f, ensure_ascii=False, indent=2)
 
 
 _HEADER_KEYWORDS = {

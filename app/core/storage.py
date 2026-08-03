@@ -141,7 +141,6 @@ RULES_PATH = CONFIG_DIR / "line_rules.json"
 GROUP_POLICY_PATH = CONFIG_DIR / "group_policy.json"
 SPLIT_LOCK_PATH = CONFIG_DIR / "split_lock.json"
 LINE_CAP_PATH = CONFIG_DIR / "line_cap.json"
-ITEM_MASTER_PATH = CONFIG_DIR / "item_master.json"  # (deprecated 호환용)
 MANUAL_PATH = CONFIG_DIR / "manual_assignments.json"
 # (재배포 트리거용 마커 — Cloud 캐시 무효화)
 
