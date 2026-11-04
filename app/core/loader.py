@@ -75,10 +75,14 @@ def read_grd_excel(source: Union[str, bytes, io.BytesIO]) -> pd.DataFrame:
     # .xls (BIFF) 우선, 실패 시 .xlsx 시도
     try:
         df = pd.read_excel(bio, engine="xlrd", header=0, dtype=str)
-    except Exception:
+    except Exception as xls_err:
         if hasattr(bio, "seek"):
             bio.seek(0)
-        df = pd.read_excel(bio, engine="openpyxl", header=0, dtype=str)
+        try:
+            df = pd.read_excel(bio, engine="openpyxl", header=0, dtype=str)
+        except Exception as xlsx_err:
+            # 두 엔진 오류를 모두 노출 (xlrd 실패 원인이 가려지지 않도록)
+            raise ValueError(f"xls(xlrd): {xls_err} / xlsx(openpyxl): {xlsx_err}") from xlsx_err
 
     # 컬럼 정규화
     new_cols = {}
